@@ -136,15 +136,100 @@ async function extractPdfTextLayer(filePath: string): Promise<string> {
   throw new Error('Unsupported pdf-parse API. Run npm install in backend to restore dependencies.');
 }
 
-async function renderPdfPages(filePath: string, maxPages = 8): Promise<Buffer[]> {
-  const { pdf } = await import('pdf-to-img');
-  const pages: Buffer[] = [];
-  for await (const page of await pdf(filePath, { scale: 2.2 })) {
-    pages.push(Buffer.isBuffer(page) ? page : Buffer.from(page));
-    if (pages.length >= maxPages) break;
+
+
+
+async function renderPdfPages(
+  filePath: string,
+  maxPages = 8
+): Promise<Buffer[]> {
+  const helperPath = path.join(__dirname, 'render_pdf_pages.py');
+  const outputDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'autoprocess-pdf-pages-')
+  );
+
+  const pythonExe = process.env.PYTHON_EXECUTABLE || 'python';
+
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      pythonExe,
+      [
+        helperPath,
+        path.resolve(filePath),
+        outputDir,
+        String(maxPages),
+        process.env.PDF_RENDER_DPI || '180'
+      ],
+      {
+        windowsHide: true,
+        maxBuffer: 20 * 1024 * 1024
+      }
+    );
+
+    console.log('[PDF Renderer]', stdout);
+    if (stderr) console.warn('[PDF Renderer stderr]', stderr);
+
+    const allFiles = await fs.readdir(outputDir);
+    console.log('[PDF Renderer] Generated files:', allFiles);
+
+    const names = allFiles
+      .filter(name => name.startsWith('page-') && name.endsWith('.png'))
+      .sort();
+
+    const pages: Buffer[] = [];
+
+    for (const name of names) {
+      const imagePath = path.join(outputDir, name);
+      pages.push(await fs.readFile(imagePath));
+    }
+
+    console.log(`[PDF Renderer] Loaded ${pages.length} page(s)`);
+
+    if (pages.length === 0) {
+      throw new Error(
+        `No rendered PNG files found. Directory contents: ${allFiles.join(', ')}`
+      );
+    }
+
+    return pages;
+  } catch (err: any) {
+    const detail = err?.stderr || err?.message || String(err);
+    throw new Error(`PDF rendering failed: ${detail}`);
+  } finally {
+    await fs.rm(outputDir, { recursive: true, force: true });
   }
-  return pages;
 }
+
+// async function renderPdfPages(filePath: string, maxPages = 8): Promise<Buffer[]> {
+//   // Use PyMuPDF instead of pdf-to-img/pdf.js. This avoids mismatched
+//   // PDF.js API/worker versions (for example API 6.x with worker 5.x).
+//   const helperPath = path.join(__dirname, 'render_pdf_pages.py');
+//   const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'autoprocess-pdf-pages-'));
+//   const pythonExe = process.env.PYTHON_EXECUTABLE || 'python';
+//   try {
+//     await execFileAsync(
+//       pythonExe,
+//       [helperPath, path.resolve(filePath), outputDir, String(maxPages), process.env.PDF_RENDER_DPI || '180'],
+//       { windowsHide: true, maxBuffer: 20 * 1024 * 1024 }
+//     );
+//     const names = (await fs.readdir(outputDir))
+//       .filter((name) => /^page-\\d+\\.png$/i.test(name))
+//       .sort((a, b) => Number(a.match(/\\d+/)?.[0]) - Number(b.match(/\\d+/)?.[0]));
+//     const pages: Buffer[] = [];
+//     for (const name of names) pages.push(await fs.readFile(path.join(outputDir, name)));
+//     if (!pages.length) throw new Error('PyMuPDF did not render any PDF pages.');
+//     return pages;
+//   } catch (err: any) {
+//     const detail = err?.stderr || err?.message || String(err);
+//     throw new Error(
+//       `PDF page rendering failed using Python/PyMuPDF. Install it with ` +
+//       '`python -m pip install pymupdf` and verify `python -c "import fitz"` works. ' +
+//       `Details: ${detail}`
+//     );
+//   } finally {
+//     await fs.rm(outputDir, { recursive: true, force: true });
+//   }
+// }
 
 function wrap(result: any, meta: ExtractMeta, confidence: number) {
   return { result: { ...result, _debug: meta }, confidence };
