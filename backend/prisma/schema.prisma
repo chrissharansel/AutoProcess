@@ -1,0 +1,132 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspaces WorkspaceMember[]
+  forms      Form[]
+  workflows  Workflow[]
+  jobs       Job[]
+}
+
+model Workspace {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members   WorkspaceMember[]
+  forms     Form[]
+  workflows Workflow[]
+  jobs      Job[]
+}
+
+model WorkspaceMember {
+  id          String   @id @default(uuid())
+  role        String   @default("member") // owner, admin, member
+  createdAt   DateTime @default(now())
+
+  userId      String
+  workspaceId String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+}
+
+model Form {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  schema      Json     // JSON Schema for the form fields
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  userId      String
+  workspaceId String
+  user        User      @relation(fields: [userId], references: [id])
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  jobs        Job[]
+}
+
+model Workflow {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  definition  Json     // React Flow nodes + edges + node configs
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  userId      String
+  workspaceId String
+  user        User      @relation(fields: [userId], references: [id])
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  jobs        Job[]
+}
+
+model Job {
+  id          String   @id @default(uuid())
+  status      String   @default("pending") // pending, processing, completed, failed, needs_review
+  type        String   // form_submission, document_extraction, workflow_run
+  inputData   Json?
+  outputData  Json?
+  error       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  completedAt DateTime?
+
+  userId      String?
+  workspaceId String
+  formId      String?
+  workflowId  String?
+  documentId  String?
+
+  user        User?      @relation(fields: [userId], references: [id])
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  form        Form?      @relation(fields: [formId], references: [id])
+  workflow    Workflow?  @relation(fields: [workflowId], references: [id])
+  document    Document?  @relation(fields: [documentId], references: [id])
+  extraction  ExtractionResult?
+}
+
+model Document {
+  id          String   @id @default(uuid())
+  filename    String
+  originalName String
+  mimeType    String
+  size        Int
+  path        String
+  createdAt   DateTime @default(now())
+
+  jobs        Job[]
+  extraction  ExtractionResult?
+}
+
+model ExtractionResult {
+  id          String   @id @default(uuid())
+  prompt      String?
+  schema      Json?    // Expected output schema
+  result      Json     // Extracted structured data
+  confidence  Float?
+  rawText     String?
+  createdAt   DateTime @default(now())
+
+  jobId       String   @unique
+  documentId  String   @unique
+  job         Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+}
