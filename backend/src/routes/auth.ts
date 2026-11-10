@@ -1,10 +1,9 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { PrismaClient } from '@prisma/client';
+import { User, Workspace } from '../models';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 router.post('/register', async (req, res, next) => {
   try {
@@ -13,37 +12,34 @@ router.post('/register', async (req, res, next) => {
       return res.status(400).json({ error: 'Email and password required' });
     }
 
-    const existing = await prisma.user.findUnique({ where: { email } });
+    const existing = await User.findOne({ email: email.toLowerCase() });
     if (existing) {
       return res.status(409).json({ error: 'Email already registered' });
     }
 
     const hashed = await bcrypt.hash(password, 12);
-    const user = await prisma.user.create({
-      data: { email, password: hashed, name: name || email.split('@')[0] },
+    const user = await User.create({
+      email: email.toLowerCase(),
+      password: hashed,
+      name: name || email.split('@')[0],
     });
 
-    // Create default workspace
-    const workspace = await prisma.workspace.create({
-      data: {
-        name: `${user.name}'s Workspace`,
-        description: 'Default workspace',
-        members: {
-          create: { userId: user.id, role: 'owner' },
-        },
-      },
+    const workspace = await Workspace.create({
+      name: `${user.name}'s Workspace`,
+      description: 'Default workspace',
+      members: [{ userId: user._id, role: 'owner', createdAt: new Date() }],
     });
 
     const token = jwt.sign(
-      { userId: user.id, email: user.email },
+      { userId: user._id.toString(), email: user.email },
       process.env.JWT_SECRET || 'secret',
       { expiresIn: '7d' }
     );
 
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, name: user.name },
-      workspace: { id: workspace.id, name: workspace.name },
+      user: { id: user._id.toString(), email: user.email, name: user.name },
+      workspace: { id: workspace._id.toString(), name: workspace.name },
     });
   } catch (err) {
     next(err);
@@ -57,27 +53,24 @@ router.post('/login', async (req, res, next) => {
       return res.status(400).json({ error: 'Email and password required' });
     }
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = await User.findOne({ email: email.toLowerCase() });
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const membership = await prisma.workspaceMember.findFirst({
-      where: { userId: user.id },
-      include: { workspace: true },
-    });
+    const workspace = await Workspace.findOne({ 'members.userId': user._id });
 
     const token = jwt.sign(
-      { userId: user.id, email: user.email },
+      { userId: user._id.toString(), email: user.email },
       process.env.JWT_SECRET || 'secret',
       { expiresIn: '7d' }
     );
 
     res.json({
       token,
-      user: { id: user.id, email: user.email, name: user.name },
-      workspace: membership?.workspace
-        ? { id: membership.workspace.id, name: membership.workspace.name }
+      user: { id: user._id.toString(), email: user.email, name: user.name },
+      workspace: workspace
+        ? { id: workspace._id.toString(), name: workspace.name }
         : null,
     });
   } catch (err) {
@@ -94,24 +87,26 @@ router.get('/me', async (req, res, next) => {
     const token = header.split(' ')[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as { userId: string };
 
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-      select: { id: true, email: true, name: true, createdAt: true },
-    });
+    const user = await User.findById(decoded.userId).select('email name createdAt');
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const memberships = await prisma.workspaceMember.findMany({
-      where: { userId: user.id },
-      include: { workspace: true },
-    });
+    const workspaces = await Workspace.find({ 'members.userId': user._id });
 
     res.json({
-      user,
-      workspaces: memberships.map((m) => ({
-        id: m.workspace.id,
-        name: m.workspace.name,
-        role: m.role,
-      })),
+      user: {
+        id: user._id.toString(),
+        email: user.email,
+        name: user.name,
+        createdAt: user.createdAt,
+      },
+      workspaces: workspaces.map((w) => {
+        const member = w.members.find((m) => m.userId.toString() === user._id.toString());
+        return {
+          id: w._id.toString(),
+          name: w.name,
+          role: member?.role || 'member',
+        };
+      }),
     });
   } catch (err) {
     next(err);

@@ -6,7 +6,7 @@ export default function Extract() {
   const { workspace } = useAuth();
   const [file, setFile] = useState<File | null>(null);
   const [prompt, setPrompt] = useState(
-    'Extract all key information from this document as structured JSON. Include vendor/supplier name, invoice number, date, total amount, line items if present, and any other important fields.'
+    'Extract invoice or PO fields as structured JSON: invoice_number, supplier_name, po_number, invoice_amount, invoice_date, tax_amount, currency, and line_items when present.'
   );
   const [schema, setSchema] = useState('');
   const [loading, setLoading] = useState(false);
@@ -39,7 +39,7 @@ export default function Extract() {
       });
       setResult(res.data);
     } catch (err: any) {
-      setError(err.response?.data?.error || err.message || 'Extraction failed');
+      setError([err.response?.data?.error, err.response?.data?.details, err.message].filter(Boolean).join(' — ') || 'Extraction failed');
     } finally {
       setLoading(false);
     }
@@ -50,7 +50,7 @@ export default function Extract() {
       <header className="page-header">
         <div>
           <h1>Document Extraction</h1>
-          <p className="subtitle">Upload a PDF or image and let Gemini extract structured data</p>
+          <p className="subtitle">Upload a PDF, image or text file. OCR + local Ollama extracts structured data</p>
         </div>
       </header>
 
@@ -113,7 +113,7 @@ export default function Extract() {
           {error && <div className="error-banner">{error}</div>}
 
           <button type="submit" className="btn-primary full" disabled={!file || loading}>
-            {loading ? 'Extracting with Gemini…' : 'Extract Data'}
+            {loading ? 'Extracting with local Ollama…' : 'Extract Data'}
           </button>
         </form>
 

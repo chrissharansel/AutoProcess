@@ -1,30 +1,24 @@
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { Form } from '../models';
 import { AuthRequest } from '../middleware/auth';
 
 const router = Router();
-const prisma = new PrismaClient();
 
-// List forms for a workspace
 router.get('/', async (req: AuthRequest, res, next) => {
   try {
     const workspaceId = req.query.workspaceId as string;
     if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
 
-    const forms = await prisma.form.findMany({
-      where: { workspaceId },
-      orderBy: { updatedAt: 'desc' },
-    });
+    const forms = await Form.find({ workspaceId }).sort({ updatedAt: -1 });
     res.json(forms);
   } catch (err) {
     next(err);
   }
 });
 
-// Get one form
 router.get('/:id', async (req: AuthRequest, res, next) => {
   try {
-    const form = await prisma.form.findUnique({ where: { id: req.params.id } });
+    const form = await Form.findById(req.params.id);
     if (!form) return res.status(404).json({ error: 'Form not found' });
     res.json(form);
   } catch (err) {
@@ -32,7 +26,6 @@ router.get('/:id', async (req: AuthRequest, res, next) => {
   }
 });
 
-// Create form
 router.post('/', async (req: AuthRequest, res, next) => {
   try {
     const { name, description, schema, workspaceId } = req.body;
@@ -40,14 +33,12 @@ router.post('/', async (req: AuthRequest, res, next) => {
       return res.status(400).json({ error: 'name, workspaceId and schema required' });
     }
 
-    const form = await prisma.form.create({
-      data: {
-        name,
-        description,
-        schema,
-        userId: req.userId!,
-        workspaceId,
-      },
+    const form = await Form.create({
+      name,
+      description,
+      schema,
+      userId: req.userId,
+      workspaceId,
     });
     res.status(201).json(form);
   } catch (err) {
@@ -55,24 +46,24 @@ router.post('/', async (req: AuthRequest, res, next) => {
   }
 });
 
-// Update form
 router.put('/:id', async (req: AuthRequest, res, next) => {
   try {
     const { name, description, schema } = req.body;
-    const form = await prisma.form.update({
-      where: { id: req.params.id },
-      data: { name, description, schema },
-    });
+    const form = await Form.findByIdAndUpdate(
+      req.params.id,
+      { name, description, schema },
+      { new: true }
+    );
+    if (!form) return res.status(404).json({ error: 'Form not found' });
     res.json(form);
   } catch (err) {
     next(err);
   }
 });
 
-// Delete form
 router.delete('/:id', async (req: AuthRequest, res, next) => {
   try {
-    await prisma.form.delete({ where: { id: req.params.id } });
+    await Form.findByIdAndDelete(req.params.id);
     res.json({ success: true });
   } catch (err) {
     next(err);

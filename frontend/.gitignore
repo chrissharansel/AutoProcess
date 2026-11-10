@@ -58,6 +58,11 @@ coverage/
 # Vite
 *.local
 
+# Optional lockfiles if you prefer not to commit (uncomment if needed)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
 # Misc
 *.pem
 *.key
