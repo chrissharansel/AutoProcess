@@ -115,3 +115,49 @@ PYTHON_EXECUTABLE="C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python311
 Use the actual path returned by `where.exe python`. Restart the backend after changing `.env`.
 
 The `pdf-to-img` dependency is no longer used by the OCR fallback. You do not need to uninstall it for this fix.
+
+
+## Invoice extraction chatbot
+
+After a document is extracted, the **Document Extraction** page displays the result as
+readable invoice fields and a line-item table instead of showing only raw JSON. The raw
+JSON remains available in a collapsible section.
+
+The **Ask about this invoice** chat panel uses the saved structured extraction and OCR/PDF
+text as context. It supports follow-up questions within the current chat session and uses
+the configured local Ollama text model (default: `llama3.2:latest`). No vision model or
+external AI API is required.
+
+The backend adds this authenticated endpoint:
+
+- `POST /api/documents/:jobId/chat`
+- JSON body: `{ "workspaceId": "...", "question": "...", "history": [] }`
+
+The endpoint verifies that the completed extraction belongs to the authenticated user and
+the selected workspace. Chat history is kept in the browser for the current page session;
+the source extraction and OCR text are read from MongoDB.
+
+
+## Invoice verification and persistent document chat (updated)
+- The Extract page now shows the original PDF in an embedded preview for side-by-side comparison with extracted invoice fields.
+- Completed extractions can be reopened from Jobs using **Open extraction & chat**. The original PDF preview and saved chatbot conversation are restored.
+- Chat turns are stored with the extraction record in MongoDB; existing extraction records remain compatible (chat history defaults to empty).
+- PO number extraction is conservative: a PO number is accepted only when the OCR/text contains an explicit PO / Customer PO / Purchase Order label. Invoice numbers and shipper references are not copied into `po_number`. If no explicit PO label is found, `po_number` is null and should be verified against the PDF.
+- PDF preview is served through an authenticated endpoint and does not expose the uploads folder publicly.
+
+## Oracle EBS PO/vendor enrichment
+
+The extraction pipeline can enrich the OCR invoice result with the Oracle EBS PO details REST endpoint before preparing the invoice API payload.
+
+Configure these values in `backend/.env`:
+
+```env
+ORACLE_PO_DETAILS_URL="https://ispdev.petmate.com:8500/apex/rest/get/podetails/"
+ORACLE_PO_API_TIMEOUT_MS=20000
+# Optional if the endpoint requires a bearer token:
+# ORACLE_PO_API_BEARER_TOKEN="your-token"
+```
+
+For a numeric PO found explicitly on the invoice, the backend calls the endpoint with `?po_number=<PO>`. If no numeric PO is found, it calls `?supplier_name=<OCR supplier name>` to try to resolve the supplier master record. Oracle response values take precedence for supplier name, supplier number, supplier ID, supplier site, currency and payment terms. PO line matching only assigns a PO line number when a unique eligible match is found; unresolved matches remain blank for review.
+
+The extraction result includes `api_payload` in the requested `{ "invoices": [{ "header": { ... } }] }` format. This is a prepared JSON body for the downstream invoice POST API. It is not automatically submitted because the invoice POST endpoint and authentication contract have not yet been provided.

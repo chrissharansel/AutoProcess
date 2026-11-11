@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import { useAuth } from '../lib/auth';
 
 export default function Jobs() {
   const { workspace } = useAuth();
+  const navigate = useNavigate();
   const [jobs, setJobs] = useState<any[]>([]);
   const [selected, setSelected] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -67,7 +69,10 @@ export default function Jobs() {
           <div className="card detail-panel">
             <div className="card-header">
               <h2>Job Detail</h2>
-              <button className="link-btn" onClick={() => setSelected(null)}>Close</button>
+              <div style={{ display: 'flex', gap: 12 }}>
+                {selected.type === 'document_extraction' && selected.status === 'completed' && <button className="btn-primary" onClick={() => navigate(`/extract?jobId=${selected.id}`)}>Open extraction & chat</button>}
+                <button className="link-btn" onClick={() => setSelected(null)}>Close</button>
+              </div>
             </div>
             <div className="detail-rows">
               <div><span className="muted">ID</span> {selected.id}</div>

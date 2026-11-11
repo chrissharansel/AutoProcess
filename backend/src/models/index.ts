@@ -156,6 +156,7 @@ export interface IExtractionResult extends Omit<Document, 'schema'> {
   result: Record<string, any>;
   confidence?: number;
   rawText?: string;
+  chatMessages?: Array<{ role: 'user' | 'assistant'; content: string; createdAt?: Date }>;
   jobId: Types.ObjectId;
   documentId: Types.ObjectId;
   createdAt: Date;
@@ -168,6 +169,7 @@ const ExtractionResultSchema = new Schema<IExtractionResult>(
     result: { type: Schema.Types.Mixed, required: true },
     confidence: { type: Number },
     rawText: { type: String },
+    chatMessages: { type: [new Schema({ role: { type: String, enum: ['user', 'assistant'], required: true }, content: { type: String, required: true }, createdAt: { type: Date, default: Date.now } }, { _id: false })], default: [] },
     jobId: { type: Schema.Types.ObjectId, ref: 'Job', required: true, unique: true },
     documentId: { type: Schema.Types.ObjectId, ref: 'Document', required: true, unique: true },
   },

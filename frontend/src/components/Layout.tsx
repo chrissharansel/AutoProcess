@@ -1,9 +1,19 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+import { useState } from 'react';
 import { useAuth } from '../lib/auth';
 
 export default function Layout() {
   const { user, workspace, logout } = useAuth();
   const navigate = useNavigate();
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('autoprocess-sidebar-collapsed') === 'true');
+
+  const toggleSidebar = () => {
+    setCollapsed((current) => {
+      const next = !current;
+      localStorage.setItem('autoprocess-sidebar-collapsed', String(next));
+      return next;
+    });
+  };
 
   const handleLogout = () => {
     logout();
@@ -11,8 +21,9 @@ export default function Layout() {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className="sidebar">
+        <button type="button" className="sidebar-toggle" onClick={toggleSidebar} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>{collapsed ? '☰' : '‹'}</button>
         <div className="sidebar-brand">
           <div className="logo-mark small">AP</div>
           <span>AutoProcess</span>

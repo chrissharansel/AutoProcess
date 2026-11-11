@@ -4,7 +4,7 @@ Usage: python render_pdf_pages.py input.pdf output_directory max_pages dpi
 """
 import os
 import sys
-import fitz
+import pymupdf as fitz
 
 def main():
     if len(sys.argv) < 5:

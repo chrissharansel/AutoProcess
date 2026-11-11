@@ -2,7 +2,7 @@
  * AutoProcess document extraction using the user's existing Ollama 0.40.x.
  *
  * Text PDFs: pdf-parse text layer where available.
- * Scanned PDFs/images: render PDF pages with pdf-to-img, then OCR with the
+ * Scanned PDFs/images: render PDF pages with PyMuPDF, then OCR with the
  * locally installed Tesseract executable. No Ollama vision architecture used.
  * Final structured extraction: text-only Ollama model (llama3.2:latest).
  */
@@ -19,6 +19,13 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.2:latest';
 const SYSTEM_RULES = `You are a strict document data extraction engine.
 Use only the supplied document text. Copy values exactly where possible.
 If a field is absent or unreadable, return null. Never invent values or sample data.
+CRITICAL PURCHASE ORDER RULES:
+- po_number must come ONLY from text explicitly labelled PO, P.O., Purchase Order, Customer PO, or Customer Purchase Order.
+- NEVER copy invoice_number into po_number.
+- NEVER use Shipper No, shipment number, item number, invoice number, order line, or tracking number as po_number.
+- Extract PO numbers only when the value is explicitly associated with a PO label/PO# column. The PO value must contain digits only (numeric). If the labelled value is alphabetic or alphanumeric, return null. For a table headed \"Customer ID PO# Rental # Pay Online ID Clerk Terms\", read the value directly under PO# (the second value after Customer ID), not words from the supplier or customer name.
+- Keep invoice_number and po_number separate even if their values look similar.
+For line items, use the printed column labels. Do not treat OCR fragments or dimensions as quantity or unit price unless they align with those columns.
 Return only a valid JSON object.`;
 
 const JSON_SHAPE = `{
@@ -60,6 +67,59 @@ function cleanJson(text: string): string {
   const end = out.lastIndexOf('}');
   if (start < 0 || end <= start) throw new Error(`Ollama did not return a JSON object: ${out.slice(0, 500)}`);
   return out.slice(start, end + 1);
+}
+
+function normalizeInvoiceFields(result: any, sourceText: string): any {
+  const text = String(sourceText || '');
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  let explicitPo: string | null = null;
+
+  // First handle labelled values such as "PO Number: 380807" or "P.O. #: 380807".
+  // Requiring a separator avoids treating the next column heading (e.g. Rental #)
+  // or a nearby word such as "Polymers" as the PO value.
+  const labelledPatterns = [
+    /\b(?:customer\s+)?P\s*\.?\s*O\s*\.?\s*(?:number|no\.?|#)\s*[:=\-]\s*(\d{3,})/i,
+    /\bpurchase\s+order\s*(?:number|no\.?|#)?\s*[:=\-]\s*(\d{3,})/i,
+  ];
+  for (const pattern of labelledPatterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) {
+      explicitPo = match[1].replace(/[.,;:]$/, '');
+      break;
+    }
+  }
+
+  // Many invoices print a compact table: "Customer ID | PO# | Rental # ..."
+  // followed by a value row: "C173 380807 ...". Read the value in the PO# column.
+  if (!explicitPo) {
+    const headerIndex = lines.findIndex((line) =>
+      /customer\s*id/i.test(line) && /\bPO\s*#/i.test(line)
+    );
+    if (headerIndex >= 0) {
+      const header = lines[headerIndex];
+      const headerTokens = header.match(/customer\s*id|PO\s*#|rental\s*#?|pay\s*online\s*id|clerk|terms/ig) || [];
+      const poColumnIndex = headerTokens.findIndex((token) => /^PO\s*#$/i.test(token));
+      const valueLine = lines.slice(headerIndex + 1).find((line) => /[A-Z0-9]/i.test(line));
+      if (valueLine && poColumnIndex >= 0) {
+        const values = valueLine.split(/[\s|]+/).filter(Boolean);
+        const candidate = values[poColumnIndex];
+        if (candidate && /^\d{3,}$/.test(candidate)) {
+          explicitPo = candidate.replace(/[.,;:]$/, '');
+        }
+      }
+    }
+  }
+
+  // Do not promote invoice numbers or arbitrary OCR fragments to a PO number.
+  const invoiceNo = String(result?.invoice_number ?? '').trim();
+  const candidate = explicitPo?.trim() || '';
+  const looksLikeWordFragment = !/^\d{3,}$/.test(candidate);
+  if (candidate && !looksLikeWordFragment && candidate.toLowerCase() !== invoiceNo.toLowerCase()) {
+    result.po_number = candidate;
+  } else {
+    result.po_number = null;
+  }
+  return result;
 }
 
 function isGarbageText(text: string): boolean {
@@ -262,7 +322,7 @@ export async function extractFromText(
   prompt: string,
   outputSchema?: Record<string, any>,
   method: 'text' | 'ocr' = 'text'
-): Promise<{ result: any; confidence?: number }> {
+): Promise<{ result: any; confidence?: number; rawText?: string }> {
   if (isGarbageText(text)) {
     return wrap(
       { error: 'No readable text could be extracted from this document', fix: 'Check PDF quality or install/configure Tesseract OCR.' },
@@ -272,12 +332,15 @@ export async function extractFromText(
   }
 
   try {
-    const result = await callOllama(text.slice(0, 45000), prompt, outputSchema);
-    return wrap(
-      result,
-      { method, model: OLLAMA_MODEL, textLength: text.length, textPreview: text.slice(0, 500) },
-      0.85
-    );
+    const result = normalizeInvoiceFields(await callOllama(text.slice(0, 45000), prompt, outputSchema), text);
+    return {
+      ...wrap(
+        result,
+        { method, model: OLLAMA_MODEL, textLength: text.length, textPreview: text.slice(0, 500) },
+        0.85
+      ),
+      rawText: text,
+    };
   } catch (err: any) {
     console.error('[extract] Ollama text extraction failed:', err.message);
     if (isConnError(err)) {
@@ -292,7 +355,7 @@ export async function extractFromDocument(
   mimeType: string,
   prompt: string,
   outputSchema?: Record<string, any>
-): Promise<{ result: any; confidence?: number }> {
+): Promise<{ result: any; confidence?: number; rawText?: string }> {
   const lower = filePath.toLowerCase();
   const isPdf = mimeType === 'application/pdf' || lower.endsWith('.pdf');
   const isImage = mimeType.startsWith('image/') || /\.(png|jpe?g|webp|bmp|tif|tiff)$/i.test(lower);
@@ -339,4 +402,62 @@ export async function extractFromDocument(
   }
 
   throw new Error(`Unsupported file type: ${mimeType}. Supported: PDF, PNG, JPG, TXT, CSV, JSON.`);
+}
+
+
+/**
+ * Answers questions using only one previously extracted document.
+ * The structured extraction is always included; OCR/text is included when available.
+ */
+export async function answerDocumentQuestion(
+  question: string,
+  extractedData: Record<string, any>,
+  rawText?: string,
+  history: Array<{ role: 'user' | 'assistant'; content: string }> = []
+): Promise<string> {
+  const context = [
+    'STRUCTURED EXTRACTED DATA:',
+    JSON.stringify(extractedData || {}, null, 2),
+    rawText ? `\nSOURCE DOCUMENT TEXT (OCR / PDF TEXT):\n${rawText.slice(0, 24000)}` : '',
+  ].filter(Boolean).join('\n\n');
+  const conversation = history.slice(-8)
+    .map((item) => `${item.role === 'user' ? 'USER' : 'ASSISTANT'}: ${String(item.content).slice(0, 2000)}`)
+    .join('\n');
+
+  const response = await fetch(`${OLLAMA_BASE}/api/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: OLLAMA_MODEL,
+      stream: false,
+      options: { temperature: 0.2, num_predict: 700 },
+      prompt: `You are AutoProcess Invoice Assistant. Answer the user's question using ONLY the document context below.
+Rules:
+- Be clear, concise and helpful.
+- Do not invent or assume missing invoice information.
+- If a value is not present, say it is not available in the extracted document.
+- For calculations, show the arithmetic and distinguish calculated values from printed invoice values.
+- If OCR appears ambiguous or inconsistent, mention that it should be verified against the original invoice.
+- Format answers with readable Markdown. Use bullets or a small table when useful.
+
+DOCUMENT CONTEXT:
+${context}
+
+PREVIOUS CHAT TURNS:
+${conversation || '(none)'}
+
+USER QUESTION:
+${question}
+
+ANSWER:`,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Ollama ${response.status}: ${await response.text()}`);
+  }
+  const payload = await response.json() as { response?: string };
+  const answer = String(payload.response || '').trim();
+  if (!answer) throw new Error('Ollama returned an empty answer.');
+  return answer;
 }
