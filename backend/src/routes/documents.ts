@@ -7,6 +7,8 @@ import { DocumentModel, Job, ExtractionResult } from '../models';
 import { AuthRequest } from '../middleware/auth';
 import { extractFromDocument, answerDocumentQuestion } from '../services/ollama';
 import { enrichAndBuildInvoicePayload } from '../services/oraclePo';
+import { Agent } from '../models/agent';
+import { runAgent } from '../services/agentRuntime';
 
 const router = Router();
 
@@ -55,7 +57,7 @@ router.post('/extract', upload.single('file'), async (req: AuthRequest, res, nex
       });
     }
 
-    const { workspaceId, prompt, schema, workflowId } = req.body;
+    const { workspaceId, prompt, schema, workflowId, agentId } = req.body;
 
     let parsedSchema: any;
     if (schema) {
@@ -96,37 +98,62 @@ router.post('/extract', upload.single('file'), async (req: AuthRequest, res, nex
       const extraction = await extractFromDocument(
         req.file.path,
         req.file.mimetype,
-        prompt ||
-          'Extract all invoice fields visible in the document. Copy values exactly. Do not invent data.',
+        prompt || 'Extract all invoice fields visible in the document. Copy values exactly. Do not invent data.',
         parsedSchema
       );
       console.log('<<< extractFromDocument returned');
       console.log('confidence:', extraction.confidence);
       console.log('result:', JSON.stringify(extraction.result, null, 2).slice(0, 1500));
 
-      // Enrich OCR output from Oracle using the explicitly extracted numeric PO.
-      // Oracle's supplier master values override OCR supplier-name variants.
-      enriched = await enrichAndBuildInvoicePayload(
-        extraction.result,
-        extraction.rawText || extraction.result?._debug?.textPreview || ''
-      );
-      extractionPayload = enriched.result;
+      const rawText = extraction.rawText || extraction.result?._debug?.textPreview || '';
+      let finalResult: any;
+      let agentExecution: any = null;
+
+      if (agentId) {
+        const agent: any = await Agent.findOne({ _id: agentId, workspaceId, userId: req.userId, isActive: true }).lean();
+        if (!agent) throw new Error('Selected agent was not found, is inactive, or does not belong to this workspace.');
+        const agentResult = await runAgent(
+          agent,
+          'Process this uploaded invoice according to your system instructions. Use the extracted fields and source OCR text. Call the configured tools when the instructions require them. Return the final configured JSON output.',
+          { fileName: req.file.originalname, mimeType: req.file.mimetype, extractedInvoice: extraction.result, rawDocumentText: rawText },
+          () => undefined
+        );
+        agentExecution = { output: agentResult.output, steps: agentResult.steps };
+        try {
+          const cleaned = String(agentResult.output || '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+          finalResult = JSON.parse(cleaned);
+        } catch {
+          finalResult = { agent_response: agentResult.output, extracted_data: extraction.result, _agent: { model: agent.model, tool_calls: agentResult.steps } };
+        }
+        if (finalResult && typeof finalResult === 'object') {
+          finalResult._agent = { model: agent.model, tool_calls: agentResult.steps, agentName: agent.name };
+        }
+        const cleanApiPayload = finalResult?.invoices ? JSON.parse(JSON.stringify(finalResult)) : null;
+        if (cleanApiPayload) delete cleanApiPayload._agent;
+        enriched = { result: finalResult, apiPayload: cleanApiPayload, enrichment: { mode: 'agent', agentId: String(agent._id), toolCalls: agentResult.steps.length } };
+      } else {
+        // Legacy deterministic enrichment remains available when no configurable agent is selected.
+        enriched = await enrichAndBuildInvoicePayload(extraction.result, rawText);
+        finalResult = enriched.result;
+      }
+      extractionPayload = finalResult;
 
       await ExtractionResult.create({
         prompt: prompt || undefined,
         schema: parsedSchema || undefined,
-        result: enriched.result,
+        result: finalResult,
         confidence: extraction.confidence ?? 0,
-        rawText: extraction.rawText || extraction.result?._debug?.textPreview || '',
+        rawText,
         jobId: job._id,
         documentId: document._id,
       });
 
       await Job.findByIdAndUpdate(job._id, {
         status: 'completed',
-        outputData: enriched.result,
+        outputData: finalResult,
         completedAt: new Date(),
       });
+      (enriched as any).agentExecution = agentExecution;
     } catch (err: any) {
       console.error('EXTRACT ERROR:', err.message);
       console.error(err.stack);
@@ -149,7 +176,7 @@ router.post('/extract', upload.single('file'), async (req: AuthRequest, res, nex
       documentId: document._id.toString(),
       status: 'completed',
       document: { originalName: document.originalName, mimeType: document.mimeType },
-      extraction: { result: extractionPayload, apiPayload: enriched.apiPayload, enrichment: enriched.enrichment },
+      extraction: { result: extractionPayload, apiPayload: enriched.apiPayload, enrichment: enriched.enrichment, agentExecution: (enriched as any).agentExecution },
     });
   } catch (err) {
     console.error('ROUTE ERROR:', err);

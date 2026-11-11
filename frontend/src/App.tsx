@@ -7,6 +7,7 @@ import Extract from './pages/Extract';
 import Jobs from './pages/Jobs';
 import Forms from './pages/Forms';
 import Workflows from './pages/Workflows';
+import AgentStudio from './pages/AgentStudio';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { token, loading } = useAuth();
@@ -34,6 +35,7 @@ export default function App() {
             <Route path="jobs" element={<Jobs />} />
             <Route path="forms" element={<Forms />} />
             <Route path="workflows" element={<Workflows />} />
+            <Route path="agents" element={<AgentStudio />} />
           </Route>
         </Routes>
       </BrowserRouter>

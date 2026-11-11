@@ -8,6 +8,7 @@ import formRoutes from './routes/forms';
 import workflowRoutes from './routes/workflows';
 import jobRoutes from './routes/jobs';
 import documentRoutes from './routes/documents';
+import agentRoutes from './routes/agents';
 import { errorHandler } from './middleware/errorHandler';
 import { authenticate } from './middleware/auth';
 
@@ -27,6 +28,7 @@ app.use('/api/forms', authenticate, formRoutes);
 app.use('/api/workflows', authenticate, workflowRoutes);
 app.use('/api/jobs', authenticate, jobRoutes);
 app.use('/api/documents', authenticate, documentRoutes);
+app.use('/api/agents', authenticate, agentRoutes);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'AutoProcess API', version: '1.0.0', db: 'mongodb' });

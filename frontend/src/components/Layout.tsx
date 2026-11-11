@@ -45,6 +45,9 @@ export default function Layout() {
           <NavLink to="/workflows" className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}>
             <span className="nav-icon">⬡</span> Workflows
           </NavLink>
+          <NavLink to="/agents" className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}>
+            <span className="nav-icon">✧</span> Agent Studio
+          </NavLink>
         </nav>
 
         <div className="sidebar-footer">

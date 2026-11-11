@@ -98,6 +98,8 @@ export default function Extract() {
     'Extract a Petmate accounts-payable invoice. Return only values explicitly printed in the invoice. Extract invoice_number, invoice_date, supplier_name, invoice_amount, currency, payment_terms, invoice_description and every financial line item in document order. For each line extract item_number, description, quantity, unit_price and amount, and classify line_type as ITEM, FREIGHT or MISCELLANEOUS. Extract po_number only when a numeric value is explicitly printed beside PO, PO#, P.O. or Purchase Order; for a table with a PO# column, take the value directly under that column. Never use the invoice number, customer name, supplier name, shipper number or nearby OCR fragments as the PO number. If no explicit numeric PO is visible, return null. Do not invent supplier IDs, supplier number, supplier site IDs, PO line numbers, requestors, unit measures, code combination IDs or distribution accounts; Oracle enrichment supplies master data later. Preserve missing values as null.'
   );
   const [schema, setSchema] = useState('');
+  const [agents, setAgents] = useState<any[]>([]);
+  const [agentId, setAgentId] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState('');
@@ -105,6 +107,13 @@ export default function Extract() {
   const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!workspace?.id) return;
+    api.get('/agents', { params: { workspaceId: workspace.id } })
+      .then((res) => setAgents(res.data || []))
+      .catch(() => setAgents([]));
+  }, [workspace?.id]);
 
   useEffect(() => {
     const jobId = searchParams.get('jobId');
@@ -164,6 +173,7 @@ export default function Extract() {
     formData.append('workspaceId', workspace.id);
     formData.append('prompt', prompt);
     if (schema.trim()) formData.append('schema', schema);
+    if (agentId) formData.append('agentId', agentId);
 
     try {
       const res = await api.post('/documents/extract', formData, {
@@ -178,9 +188,12 @@ export default function Extract() {
   };
 
   const extracted = result?.extraction?.result || result?.result || {};
-  const lineItems = Array.isArray(extracted.line_items) ? extracted.line_items : [];
-  const displayFields = Object.entries(extracted).filter(
-    ([key, value]) => !['_debug', '_enrichment', 'line_items', 'api_payload', 'oracle_po_details'].includes(key) && value !== null && value !== undefined && value !== ''
+  const apiPayload = result?.extraction?.apiPayload || extracted.api_payload || null;
+  const invoiceHeader = extracted?.invoices?.[0]?.header || null;
+  const lineItems = Array.isArray(invoiceHeader?.lines) ? invoiceHeader.lines : (Array.isArray(extracted.line_items) ? extracted.line_items : []);
+  const displaySource = invoiceHeader || extracted;
+  const displayFields = Object.entries(displaySource).filter(
+    ([key, value]) => !['_debug', '_enrichment', 'line_items', 'lines', 'api_payload', 'oracle_po_details', 'attachement_url'].includes(key) && value !== null && value !== undefined && value !== ''
   );
 
   const labelFor = (key: string) =>
@@ -256,7 +269,16 @@ export default function Extract() {
           </div>
 
           <div className="field">
-            <label>Extraction Prompt</label>
+            <label>Run with configurable agent (optional)</label>
+            <select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+              <option value="">Use standard extraction + configured legacy enrichment</option>
+              {agents.filter((a) => a.isActive !== false).map((a) => <option key={a._id || a.id} value={a._id || a.id}>{a.name} · {a.model}</option>)}
+            </select>
+            <p className="muted">When selected, the agent receives OCR + extracted fields and can call its registered tools.</p>
+          </div>
+
+          <div className="field">
+            <label>Initial extraction prompt</label>
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
@@ -338,9 +360,9 @@ export default function Extract() {
                         <tbody>
                           {lineItems.map((item: any, index: number) => (
                             <tr key={index}>
-                              <td>{item.line ?? index + 1}</td>
+                              <td>{item.invoice_line_number ?? item.line ?? index + 1}</td>
                               <td>{item.item_number ?? '—'}</td>
-                              <td>{item.description ?? '—'}</td>
+                              <td>{item.line_description ?? item.description ?? '—'}</td>
                               <td>{item.quantity ?? '—'}</td>
                               <td>{item.unit_price ?? '—'}</td>
                               <td>{item.amount ?? '—'}</td>
@@ -352,17 +374,24 @@ export default function Extract() {
                   </div>
                 )}
 
+                {result?.extraction?.agentExecution?.steps?.length > 0 && (
+                  <details className="raw-json-details" open>
+                    <summary>Agent tool execution trace ({result.extraction.agentExecution.steps.length})</summary>
+                    <pre className="json-view">{JSON.stringify(result.extraction.agentExecution.steps, null, 2)}</pre>
+                  </details>
+                )}
+
                 <details className="raw-json-details">
                   <summary>View raw extraction JSON</summary>
                   <pre className="json-view">{JSON.stringify(extracted, null, 2)}</pre>
                 </details>
 
-                {extracted.api_payload && (
+                {apiPayload && (
                   <details className="raw-json-details api-payload-details" open>
                     <summary>Oracle-enriched Invoice API payload</summary>
                     <p className="muted">This is the JSON body prepared for your invoice POST API. It has not been submitted to an invoice endpoint.</p>
-                    <pre className="json-view">{JSON.stringify(extracted.api_payload, null, 2)}</pre>
-                    <button type="button" className="btn-secondary" onClick={() => navigator.clipboard.writeText(JSON.stringify(extracted.api_payload, null, 2))}>Copy API JSON</button>
+                    <pre className="json-view">{JSON.stringify(apiPayload, null, 2)}</pre>
+                    <button type="button" className="btn-secondary" onClick={() => navigator.clipboard.writeText(JSON.stringify(apiPayload, null, 2))}>Copy API JSON</button>
                   </details>
                 )}
               </div>

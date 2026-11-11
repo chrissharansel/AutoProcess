@@ -1,0 +1,14 @@
+.agent-studio { color: var(--text); }
+.agent-studio .studio-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); }
+.agent-studio label { display:block; font-size:13px; font-weight:600; margin:14px 0 6px; color:var(--text); }
+.agent-studio .studio-input { display:block; width:100%; border:1px solid var(--border); background:var(--bg-elevated); color:var(--text); border-radius:8px; padding:10px 12px; font:inherit; font-size:13px; box-sizing:border-box; }
+.agent-studio .studio-input:focus { outline:2px solid rgba(139,92,246,.22); border-color:var(--primary); }
+.agent-studio .studio-primary,.agent-studio .studio-secondary { border-radius:8px; padding:9px 13px; font-weight:600; font-size:13px; cursor:pointer; }
+.agent-studio .studio-primary { color:white; background:var(--primary); border:1px solid var(--primary); }
+.agent-studio .studio-primary:disabled { opacity:.5; cursor:not-allowed; }
+.agent-studio .studio-secondary { color:var(--text); background:var(--bg-elevated); border:1px solid var(--border); }
+.agent-studio .studio-notice { padding:10px 12px; border-radius:8px; background:rgba(139,92,246,.10); border:1px solid rgba(139,92,246,.25); font-size:13px; }
+.agent-studio .studio-tabs { display:flex; gap:8px; flex-wrap:wrap; border-bottom:1px solid var(--border); padding-bottom:10px; margin:20px 0; }
+.agent-studio pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; background:var(--bg-elevated); color:var(--text); padding:10px; border-radius:8px; }
+.agent-studio .muted { color:var(--text-muted); }
+@media(max-width:900px){.agent-studio .studio-two-col{grid-template-columns:1fr!important}}
