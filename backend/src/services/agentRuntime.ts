@@ -7,7 +7,7 @@ function interpolate(value: string): string {
   return value.replace(/\{\{ENV:([A-Z0-9_]+)\}\}/g, (_m, key) => process.env[key] || '');
 }
 
-async function executeHttpTool(tool: any, args: Record<string, any>) {
+export async function executeHttpTool(tool: any, args: Record<string, any>) {
   const endpoint = String(tool.endpoint || '').trim();
   const url = new URL(endpoint);
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Only HTTP/HTTPS tool endpoints are allowed.');
@@ -17,26 +17,61 @@ async function executeHttpTool(tool: any, args: Record<string, any>) {
   if (url.username || url.password) throw new Error('Do not embed credentials in tool URLs. Configure headers instead.');
   const headers: Record<string, string> = { Accept: 'application/json' };
   for (const [k, v] of Object.entries(tool.headers || {})) headers[k] = interpolate(String(v));
+
+  // Resolve authentication without exposing secrets to the LLM or frontend
+  const authType = tool.authType || 'none';
+  const authConfig = tool.authConfig || {};
+  if (authType === 'basic') {
+    const user = process.env[authConfig.usernameEnv || 'ORACLE_PO_API_USERNAME'] || '';
+    const pass = process.env[authConfig.passwordEnv || 'ORACLE_PO_API_PASSWORD'] || '';
+    if (user || pass) {
+      headers['Authorization'] = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
+    }
+  } else if (authType === 'bearer') {
+    const token = process.env[authConfig.tokenEnv || 'ORACLE_API_TOKEN'] || '';
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+  } else if (authType === 'apiKey') {
+    const key = process.env[authConfig.apiKeyEnv || 'API_KEY'] || '';
+    const headerName = authConfig.apiKeyHeader || 'X-API-Key';
+    if (key) headers[headerName] = key;
+  } else if (authType === 'custom' && authConfig.customHeaders) {
+    for (const [k, v] of Object.entries(authConfig.customHeaders)) {
+      headers[k] = interpolate(String(v));
+    }
+  }
+
   const method = tool.method || 'GET';
-  const init: RequestInit = { method, headers, signal: AbortSignal.timeout(Number(process.env.AGENT_TOOL_TIMEOUT_MS || 20000)) };
+  const timeout = Number(tool.timeoutMs || process.env.AGENT_TOOL_TIMEOUT_MS || 20000);
+  const init: RequestInit = { method, headers, signal: AbortSignal.timeout(timeout) };
   if (method === 'GET' || method === 'DELETE') {
     Object.entries(args || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v)); });
   } else {
     headers['Content-Type'] = headers['Content-Type'] || 'application/json';
     init.body = JSON.stringify(args || {});
   }
-  const response = await fetch(url.toString(), init);
-  const text = await response.text();
-  let data: any;
-  try { data = JSON.parse(text); } catch { data = text.slice(0, 20000); }
-  if (!response.ok) throw new Error(`Tool HTTP ${response.status}: ${typeof data === 'string' ? data : JSON.stringify(data).slice(0, 3000)}`);
-  return data;
+
+  const maxRetries = Math.min(Number(tool.retryCount || 0), 5);
+  let lastError: any;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url.toString(), init);
+      const text = await response.text();
+      let data: any;
+      try { data = JSON.parse(text); } catch { data = text.slice(0, 20000); }
+      if (!response.ok) throw new Error(`Tool HTTP ${response.status}: ${typeof data === 'string' ? data : JSON.stringify(data).slice(0, 3000)}`);
+      return data;
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxRetries) await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+    }
+  }
+  throw lastError;
 }
 
 export async function runAgent(agent: any, userInput: string, context: any, onStep: (step: any) => void) {
   const tools = await AgentTool.find({ _id: { $in: agent.toolIds || [] }, workspaceId: agent.workspaceId, enabled: true }).lean();
   const ollamaTools = tools.map((t: any) => ({ type: 'function', function: {
-    name: t.name, description: t.description,
+    name: t.functionName || t.name, description: t.description,
     parameters: t.parameters || { type: 'object', properties: {} },
   }}));
   const messages: any[] = [
@@ -60,7 +95,7 @@ export async function runAgent(agent: any, userInput: string, context: any, onSt
       const name = call.function?.name;
       let args = call.function?.arguments || {};
       if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
-      const tool: any = tools.find((t: any) => t.name === name);
+      const tool: any = tools.find((t: any) => t.name === name || t.functionName === name);
       if (!tool) {
         const result = { error: `Tool ${name} is not registered or enabled.` };
         trace.push({ type: 'tool', name, arguments: args, result, status: 'error' });

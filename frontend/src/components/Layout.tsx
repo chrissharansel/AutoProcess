@@ -1,11 +1,15 @@
-import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 
 export default function Layout() {
   const { user, workspace, logout } = useAuth();
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('autoprocess-sidebar-collapsed') === 'true');
+
+  useEffect(() => {
+    localStorage.setItem('autoprocess-sidebar-collapsed', String(collapsed));
+  }, [collapsed]);
 
   const toggleSidebar = () => {
     setCollapsed((current) => {
@@ -23,30 +27,37 @@ export default function Layout() {
   return (
     <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className="sidebar">
-        <button type="button" className="sidebar-toggle" onClick={toggleSidebar} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>{collapsed ? '☰' : '‹'}</button>
+        <button type="button" className="sidebar-toggle" onClick={toggleSidebar} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+          {collapsed ? '☰' : '‹'}
+        </button>
         <div className="sidebar-brand">
           <div className="logo-mark small">AP</div>
           <span>AutoProcess</span>
         </div>
 
         <nav className="sidebar-nav">
+          <div className="nav-section-label">Overview</div>
           <NavLink to="/" end className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}>
             <span className="nav-icon">◈</span> Dashboard
           </NavLink>
+
+          <div className="nav-section-label">Documents</div>
           <NavLink to="/extract" className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}>
-            <span className="nav-icon">◎</span> Extract
+            <span className="nav-icon">◎</span> Extract / Upload
           </NavLink>
           <NavLink to="/jobs" className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}>
-            <span className="nav-icon">☰</span> Jobs
+            <span className="nav-icon">☰</span> Jobs & History
           </NavLink>
-          <NavLink to="/forms" className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}>
-            <span className="nav-icon">▤</span> Forms
+
+          <div className="nav-section-label">Agent Studio</div>
+          <NavLink to="/agents" className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}>
+            <span className="nav-icon">✧</span> Agents & Tools
           </NavLink>
           <NavLink to="/workflows" className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}>
             <span className="nav-icon">⬡</span> Workflows
           </NavLink>
-          <NavLink to="/agents" className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}>
-            <span className="nav-icon">✧</span> Agent Studio
+          <NavLink to="/forms" className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}>
+            <span className="nav-icon">▤</span> Schemas / Forms
           </NavLink>
         </nav>
 

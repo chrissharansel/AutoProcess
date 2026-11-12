@@ -85,6 +85,14 @@ export default function AgentStudio() {
   const [method, setMethod] = useState('GET');
   const [headers, setHeaders] = useState('{}');
   const [parameters, setParameters] = useState(JSON.stringify(PO_PARAMS, null, 2));
+  const [authType, setAuthType] = useState<'none' | 'basic' | 'bearer' | 'apiKey' | 'custom'>('basic');
+  const [usernameEnv, setUsernameEnv] = useState('ORACLE_PO_API_USERNAME');
+  const [passwordEnv, setPasswordEnv] = useState('ORACLE_PO_API_PASSWORD');
+  const [tokenEnv, setTokenEnv] = useState('ORACLE_API_TOKEN');
+  const [apiKeyEnv, setApiKeyEnv] = useState('API_KEY');
+  const [apiKeyHeader, setApiKeyHeader] = useState('X-API-Key');
+  const [timeoutMs, setTimeoutMs] = useState(20000);
+  const [retryCount, setRetryCount] = useState(0);
   const [runInput, setRunInput] = useState('Process this invoice. Extract the data, call the required tools, enrich the supplier and PO line details, and return the configured invoice JSON.');
   const [runContext, setRunContext] = useState('{}');
   const [runOutput, setRunOutput] = useState('');
@@ -119,8 +127,17 @@ export default function AgentStudio() {
   };
   const addTool = async () => {
     try {
-      const body = { workspaceId, name: toolName, description: toolDescription, endpoint, method, headers: JSON.parse(headers || '{}'), parameters: JSON.parse(parameters || '{}'), enabled: true };
-      await api.post('/agents/tools', body); setMessage(`Tool ${toolName} added.`); await load();
+      const authConfig: any = {};
+      if (authType === 'basic') { authConfig.usernameEnv = usernameEnv; authConfig.passwordEnv = passwordEnv; }
+      else if (authType === 'bearer') { authConfig.tokenEnv = tokenEnv; }
+      else if (authType === 'apiKey') { authConfig.apiKeyEnv = apiKeyEnv; authConfig.apiKeyHeader = apiKeyHeader; }
+      const body = {
+        workspaceId, name: toolName, functionName: toolName, description: toolDescription,
+        endpoint, method, headers: JSON.parse(headers || '{}'),
+        parameters: JSON.parse(parameters || '{}'),
+        authType, authConfig, timeoutMs, retryCount, enabled: true
+      };
+      await api.post('/agents/tools', body); setMessage(`Tool ${toolName} registered with ${authType} authentication.`); await load();
     } catch (e: any) { setMessage(e.response?.data?.error || e.message || 'Invalid tool configuration.'); }
   };
   const run = async () => {
@@ -137,7 +154,7 @@ export default function AgentStudio() {
 
   return <div className="agent-studio" style={{maxWidth: 1440, margin: '0 auto', padding: 28}}>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:16,flexWrap:'wrap'}}>
-      <div><div className="eyebrow">AUTOPROCESS / CONFIGURATION</div><h1 style={{margin:'6px 0'}}>Agent Studio</h1><p className="muted">Build prompt-driven agents, connect APIs as tools, and inspect every execution.</p></div>
+      <div><div className="eyebrow">AUTOPROCESS / CONFIGURATION</div><h1 style={{margin:'6px 0'}}>Agent Studio</h1><p className="muted">1) Register tools in <strong>Tool Registry</strong> · 2) Create an agent and <strong>attach tools</strong> · 3) Run from Extract or the Run tab. Tools are never hard-coded.</p></div>
       <button className="studio-primary" onClick={()=>{setSelectedAgent(null);setName('New Agent');setDescription('');setPrompt('You are a helpful task execution agent. Follow the user instructions, call tools when required, and never invent data.');setSelectedTools([]);setSchema('{}');setTab('agents');}}>+ New Agent</button>
     </div>
     <div style={{display:'flex',gap:8,margin:'22px 0',borderBottom:'1px solid var(--border)',paddingBottom:10}}>
@@ -159,18 +176,43 @@ export default function AgentStudio() {
       </section>
     </div>}
 
-    {tab==='tools' && <div style={{display:'grid',gridTemplateColumns:'minmax(280px,1fr) minmax(400px,1.4fr)',gap:20}}>
-      <section className="studio-card" style={{padding:20}}><h2>Register API tool</h2><p className="muted">Each registered API becomes a callable function that the agent can choose during execution.</p>
-        <label>Tool function name</label><input className="studio-input" value={toolName} onChange={e=>setToolName(e.target.value)}/>
+    {tab==='tools' && <div style={{display:'grid',gridTemplateColumns:'minmax(320px,1fr) minmax(400px,1.4fr)',gap:20}}>
+      <section className="studio-card" style={{padding:20}}><h2>Create / Register API Tool</h2><p className="muted">Register external REST APIs as tools. Credentials are stored as environment variable names and resolved only on the backend. Never put real passwords in the UI.</p>
+        <label>Tool function name (for the LLM)</label><input className="studio-input" value={toolName} onChange={e=>setToolName(e.target.value)} placeholder="get_po_details"/>
         <label>Description for the agent</label><textarea className="studio-input" value={toolDescription} onChange={e=>setToolDescription(e.target.value)} style={{minHeight:90}}/>
-        <label>HTTP method</label><select className="studio-input" value={method} onChange={e=>setMethod(e.target.value)}><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
-        <label>Endpoint URL</label><input className="studio-input" value={endpoint} onChange={e=>setEndpoint(e.target.value)}/>
-        <label>Headers JSON (use {'{{ENV:NAME}}'} for secrets)</label><textarea className="studio-input" value={headers} onChange={e=>setHeaders(e.target.value)} style={{minHeight:75,fontFamily:'monospace'}}/>
-        <label>Function parameters JSON Schema</label><textarea className="studio-input" value={parameters} onChange={e=>setParameters(e.target.value)} style={{minHeight:180,fontFamily:'monospace'}}/>
-        <button className="studio-primary" onClick={addTool}>+ Register tool</button>
-        <button className="studio-secondary" style={{marginLeft:8}} onClick={()=>{setToolName('get_non_po_invoice_historical_distributions');setToolDescription('Find historical GL distribution and requestor values for a non-PO invoice line using supplier number, line description and line type.');setMethod('GET');setEndpoint('https://YOUR-APEX-HOST/apex/rest/get/nonpodistributions/');setParameters(JSON.stringify({type:'object',properties:{SUPPLIER_NUMBER:{type:'string'},LINE_DESCRIPTION:{type:'string'},LINE_TYPE_LOOKUP_CODE:{type:'string',enum:['ITEM','FREIGHT','MISCELLANEOUS']}},required:['SUPPLIER_NUMBER','LINE_DESCRIPTION','LINE_TYPE_LOOKUP_CODE']},null,2));}}>Prepare historical lookup tool</button>
+        <div style={{display:'grid',gridTemplateColumns:'120px 1fr',gap:12}}>
+          <div><label>HTTP method</label><select className="studio-input" value={method} onChange={e=>setMethod(e.target.value)}><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select></div>
+          <div><label>Endpoint URL</label><input className="studio-input" value={endpoint} onChange={e=>setEndpoint(e.target.value)}/></div>
+        </div>
+        <label>Authentication type</label>
+        <select className="studio-input" value={authType} onChange={e=>setAuthType(e.target.value as any)}>
+          <option value="none">No authentication</option>
+          <option value="basic">Basic Authentication (env vars)</option>
+          <option value="bearer">Bearer Token (env var)</option>
+          <option value="apiKey">API Key (header + env var)</option>
+          <option value="custom">Custom Headers</option>
+        </select>
+        {authType === 'basic' && <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginTop:8}}>
+          <div><label>Username env var</label><input className="studio-input" value={usernameEnv} onChange={e=>setUsernameEnv(e.target.value)} placeholder="ORACLE_PO_API_USERNAME"/></div>
+          <div><label>Password env var</label><input className="studio-input" value={passwordEnv} onChange={e=>setPasswordEnv(e.target.value)} placeholder="ORACLE_PO_API_PASSWORD"/></div>
+        </div>}
+        {authType === 'bearer' && <div style={{marginTop:8}}><label>Token env var</label><input className="studio-input" value={tokenEnv} onChange={e=>setTokenEnv(e.target.value)} placeholder="ORACLE_API_TOKEN"/></div>}
+        {authType === 'apiKey' && <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginTop:8}}>
+          <div><label>API Key env var</label><input className="studio-input" value={apiKeyEnv} onChange={e=>setApiKeyEnv(e.target.value)}/></div>
+          <div><label>Header name</label><input className="studio-input" value={apiKeyHeader} onChange={e=>setApiKeyHeader(e.target.value)}/></div>
+        </div>}
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginTop:8}}>
+          <div><label>Timeout (ms)</label><input className="studio-input" type="number" value={timeoutMs} onChange={e=>setTimeoutMs(Number(e.target.value))}/></div>
+          <div><label>Retry count</label><input className="studio-input" type="number" min={0} max={5} value={retryCount} onChange={e=>setRetryCount(Number(e.target.value))}/></div>
+        </div>
+        <label>Extra Headers JSON (use {'{{ENV:NAME}}'} for secrets)</label><textarea className="studio-input" value={headers} onChange={e=>setHeaders(e.target.value)} style={{minHeight:60,fontFamily:'monospace'}}/>
+        <label>Function parameters JSON Schema</label><textarea className="studio-input" value={parameters} onChange={e=>setParameters(e.target.value)} style={{minHeight:160,fontFamily:'monospace'}}/>
+        <div style={{display:'flex',gap:8,marginTop:12,flexWrap:'wrap'}}>
+          <button className="studio-primary" onClick={addTool}>+ Register tool</button>
+          <button className="studio-secondary" onClick={()=>{setToolName('get_po_details');setToolDescription('Fetch Oracle EBS purchase order details or supplier master details. Pass po_number for a PO lookup or supplier_name for supplier lookup.');setMethod('GET');setEndpoint('https://ispdev.petmate.com:8500/apex/rest/get/podetails/');setAuthType('basic');setUsernameEnv('ORACLE_PO_API_USERNAME');setPasswordEnv('ORACLE_PO_API_PASSWORD');setParameters(JSON.stringify(PO_PARAMS,null,2));}}>Load Oracle PO tool</button>
+        </div>
       </section>
-      <section className="studio-card" style={{padding:20}}><h2>Available tools</h2>{tools.map(t=><div key={t._id||t.id} style={{padding:'14px 0',borderBottom:'1px solid var(--border)'}}><div style={{display:'flex',justifyContent:'space-between',gap:12}}><strong>{t.name}</strong><span className="muted">{t.method}</span></div><p className="muted" style={{fontSize:13}}>{t.description}</p><code style={{fontSize:12,overflowWrap:'anywhere'}}>{t.endpoint}</code><div style={{fontSize:12,marginTop:6}}>{t.enabled?'Enabled':'Disabled'} · {t.parameters?.required?.join(', ') || 'No required arguments'}</div><button className="studio-secondary" style={{marginTop:8}} onClick={async()=>{if(window.confirm(`Delete tool ${t.name}?`)){await api.delete(`/agents/tools/${t._id||t.id}`,{params:{workspaceId}});await load();}}}>Delete tool</button></div>)}{!tools.length&&<p className="muted">No tools registered yet.</p>}</section>
+      <section className="studio-card" style={{padding:20}}><h2>Available tools</h2>{tools.map(t=><div key={t._id||t.id} style={{padding:'14px 0',borderBottom:'1px solid var(--border)'}}><div style={{display:'flex',justifyContent:'space-between',gap:12}}><strong>{t.name}</strong><span className="muted">{t.method} · {t.authType || 'none'}</span></div><p className="muted" style={{fontSize:13}}>{t.description}</p><code style={{fontSize:12,overflowWrap:'anywhere'}}>{t.endpoint}</code><div style={{fontSize:12,marginTop:6}}>{t.enabled?'Enabled':'Disabled'} · timeout {t.timeoutMs || 20000}ms · {t.parameters?.required?.join(', ') || 'No required arguments'}</div><div style={{display:'flex',gap:8,marginTop:8}}><button className="studio-secondary" onClick={async()=>{if(window.confirm(`Delete tool ${t.name}?`)){await api.delete(`/agents/tools/${t._id||t.id}`,{params:{workspaceId}});await load();}}}>Delete</button><button className="studio-secondary" onClick={async()=>{try{const r=await api.post(`/agents/tools/${t._id||t.id}/test`,{workspaceId,args:{}});setMessage(r.data.success?`Tool test OK (${r.data.durationMs}ms)`:`Test failed: ${r.data.error}`);}catch(e:any){setMessage(e.response?.data?.error||e.message);}}}>Test tool</button></div></div>)}{!tools.length&&<p className="muted">No tools registered yet. Use the form to create one.</p>}</section>
     </div>}
 
     {tab==='run' && <div style={{display:'grid',gridTemplateColumns:'minmax(320px,1fr) minmax(350px,1fr)',gap:20}}>

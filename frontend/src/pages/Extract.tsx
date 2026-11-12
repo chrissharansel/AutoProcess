@@ -107,6 +107,8 @@ export default function Extract() {
   const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [processPhase, setProcessPhase] = useState<'idle'|'ocr'|'agent'|'done'>('idle');
 
   useEffect(() => {
     if (!workspace?.id) return;
@@ -123,7 +125,8 @@ export default function Extract() {
     api.get(`/documents/${jobId}`)
       .then((res) => {
         if (!active) return;
-        setResult({ ...res.data, document: res.data.document || { originalName: file?.name, mimeType: file?.type || 'application/pdf' } });
+        setProcessPhase('done');
+      setResult({ ...res.data, document: res.data.document || { originalName: file?.name, mimeType: file?.type || 'application/pdf' } });
         setChatMessages((res.data.chatMessages || []).map((m: any) => ({ role: m.role, content: m.content })));
       })
       .catch((err) => setError(err.response?.data?.error || 'Could not load the previous extraction.'))
@@ -163,6 +166,7 @@ export default function Extract() {
     e.preventDefault();
     if (!file || !workspace?.id) return;
     setLoading(true);
+    setProcessPhase('ocr');
     setError('');
     setResult(null);
     setChatMessages([]);
@@ -176,11 +180,14 @@ export default function Extract() {
     if (agentId) formData.append('agentId', agentId);
 
     try {
+      if (agentId) setProcessPhase('agent');
       const res = await api.post('/documents/extract', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
+      setProcessPhase('done');
       setResult({ ...res.data, document: res.data.document || { originalName: file.name, mimeType: file.type || 'application/pdf' } });
     } catch (err: any) {
+      setProcessPhase('idle');
       setError([err.response?.data?.error, err.response?.data?.details, err.message].filter(Boolean).join(' — ') || 'Extraction failed');
     } finally {
       setLoading(false);
@@ -236,9 +243,10 @@ export default function Extract() {
       <div className="extract-grid">
         <form onSubmit={handleSubmit} className="card extract-form">
           <div
-            className={`dropzone ${file ? 'has-file' : ''}`}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={handleDrop}
+            className={`dropzone ${file ? 'has-file' : ''} ${dragOver ? 'drag-over' : ''}`}
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => { setDragOver(false); handleDrop(e); }}
             onClick={() => fileRef.current?.click()}
           >
             <input
@@ -269,13 +277,37 @@ export default function Extract() {
           </div>
 
           <div className="field">
-            <label>Run with configurable agent (optional)</label>
-            <select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
-              <option value="">Use standard extraction + configured legacy enrichment</option>
-              {agents.filter((a) => a.isActive !== false).map((a) => <option key={a._id || a.id} value={a._id || a.id}>{a.name} · {a.model}</option>)}
-            </select>
-            <p className="muted">When selected, the agent receives OCR + extracted fields and can call its registered tools.</p>
+            <label>Processing agent</label>
+            <div className="agent-picker">
+              <label className={`agent-option ${!agentId ? 'selected' : ''}`}>
+                <input type="radio" name="agent" checked={!agentId} onChange={() => setAgentId('')} />
+                <div>
+                  <strong>Standard extraction</strong>
+                  <div className="muted">OCR + Ollama extract only (no tool calling)</div>
+                </div>
+              </label>
+              {agents.filter((a) => a.isActive !== false).map((a) => (
+                <label key={a._id || a.id} className={`agent-option ${agentId === (a._id || a.id) ? 'selected' : ''}`}>
+                  <input type="radio" name="agent" checked={agentId === (a._id || a.id)} onChange={() => setAgentId(a._id || a.id)} />
+                  <div>
+                    <strong>{a.name}</strong>
+                    <div className="muted">{a.model || 'llama3.2:latest'} · {(a.toolIds || []).length} tool{(a.toolIds || []).length === 1 ? '' : 's'} attached</div>
+                  </div>
+                </label>
+              ))}
+            </div>
+            {agents.length === 0 && (
+              <p className="muted" style={{ marginTop: 8 }}>No agents yet. Create one in <a href="/agents" style={{ color: 'var(--primary)' }}>Agent Studio</a> and attach tools first.</p>
+            )}
           </div>
+
+          {(loading || processPhase !== 'idle') && (
+            <div className="process-steps">
+              <span className={`process-step ${processPhase !== 'idle' ? 'done' : ''} ${processPhase === 'ocr' ? 'active' : ''}`}>1. OCR / text</span>
+              <span className={`process-step ${processPhase === 'agent' || processPhase === 'done' ? 'done' : ''} ${processPhase === 'agent' ? 'active' : ''}`}>2. Agent + tools</span>
+              <span className={`process-step ${processPhase === 'done' ? 'done' : ''}`}>3. Validate & save</span>
+            </div>
+          )}
 
           <div className="field">
             <label>Initial extraction prompt</label>
@@ -301,7 +333,7 @@ export default function Extract() {
           {error && <div className="error-banner">{error}</div>}
 
           <button type="submit" className="btn-primary full" disabled={!file || loading}>
-            {loading ? 'Extracting with local Ollama…' : 'Extract Data'}
+            {loading ? (processPhase === 'agent' ? 'Agent running tools…' : 'Extracting document…') : 'Extract Invoice'}
           </button>
         </form>
 

@@ -14,13 +14,38 @@ router.get('/tools', async (req: AuthRequest, res, next) => {
 });
 router.post('/tools', async (req: AuthRequest, res, next) => {
   try {
-    const { workspaceId, name, description, method, endpoint, headers, parameters, enabled } = req.body || {};
+    const { workspaceId, name, functionName, description, method, endpoint, headers, parameters, authType, authConfig, timeoutMs, retryCount, responseDescription, enabled } = req.body || {};
     if (!workspaceId || !name || !description || !endpoint || !safeToolName(name)) return res.status(400).json({ error: 'workspaceId, valid tool name, description and endpoint are required.' });
     const parsed = new URL(endpoint);
     if (!['http:', 'https:'].includes(parsed.protocol)) return res.status(400).json({ error: 'Tool endpoint must use HTTP or HTTPS.' });
-    const tool = await AgentTool.create({ workspaceId, userId: req.userId, name, description, method: method || 'GET', endpoint, headers: headers || {}, parameters: parameters || { type: 'object', properties: {} }, enabled: enabled !== false });
+    const tool = await AgentTool.create({
+      workspaceId, userId: req.userId, name, functionName: functionName || name, description,
+      method: method || 'GET', endpoint, headers: headers || {},
+      parameters: parameters || { type: 'object', properties: {} },
+      authType: authType || 'none', authConfig: authConfig || {},
+      timeoutMs: timeoutMs || 20000, retryCount: retryCount || 0,
+      responseDescription, enabled: enabled !== false
+    });
     res.status(201).json(tool);
   } catch (e: any) { if (e.code === 11000) return res.status(409).json({ error: 'Tool name already exists.' }); next(e); }
+});
+
+// Test a tool with sample arguments (secrets resolved server-side only)
+router.post('/tools/:id/test', async (req: AuthRequest, res, next) => {
+  try {
+    const tool: any = await AgentTool.findOne({ _id: req.params.id, workspaceId: req.body.workspaceId || req.query.workspaceId, userId: req.userId }).lean();
+    if (!tool) return res.status(404).json({ error: 'Tool not found.' });
+    if (!tool.enabled) return res.status(400).json({ error: 'Tool is disabled.' });
+    const { executeHttpTool } = await import('../services/agentRuntime');
+    const args = req.body.args || {};
+    const started = Date.now();
+    try {
+      const result = await executeHttpTool(tool, args);
+      res.json({ success: true, durationMs: Date.now() - started, result });
+    } catch (err: any) {
+      res.status(400).json({ success: false, durationMs: Date.now() - started, error: err.message || String(err) });
+    }
+  } catch (e) { next(e); }
 });
 router.put('/tools/:id', async (req: AuthRequest, res, next) => {
   try {

@@ -47,11 +47,24 @@ import mongoose, { Schema, Document, Types } from 'mongoose';
 
 export interface IAgentTool extends Document {
   name: string;
+  functionName?: string;
   description: string;
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   endpoint: string;
   headers: Record<string, string>;
   parameters: Record<string, any>;
+  authType: 'none' | 'basic' | 'bearer' | 'apiKey' | 'custom';
+  authConfig?: {
+    usernameEnv?: string;
+    passwordEnv?: string;
+    tokenEnv?: string;
+    apiKeyHeader?: string;
+    apiKeyEnv?: string;
+    customHeaders?: Record<string, string>;
+  };
+  timeoutMs?: number;
+  retryCount?: number;
+  responseDescription?: string;
   enabled: boolean;
   userId: Types.ObjectId;
   workspaceId: Types.ObjectId;
@@ -62,6 +75,7 @@ export interface IAgentTool extends Document {
 const AgentToolSchema = new Schema<IAgentTool>(
   {
     name: { type: String, required: true, trim: true },
+    functionName: { type: String, trim: true },
     description: { type: String, required: true },
     method: {
       type: String,
@@ -74,6 +88,18 @@ const AgentToolSchema = new Schema<IAgentTool>(
       type: Schema.Types.Mixed,
       default: { type: 'object', properties: {}, required: [] }
     },
+    authType: {
+      type: String,
+      enum: ['none', 'basic', 'bearer', 'apiKey', 'custom'],
+      default: 'none'
+    },
+    authConfig: {
+      type: Schema.Types.Mixed,
+      default: {}
+    },
+    timeoutMs: { type: Number, default: 20000 },
+    retryCount: { type: Number, default: 0, min: 0, max: 5 },
+    responseDescription: { type: String },
     enabled: { type: Boolean, default: true },
     userId: {
       type: Schema.Types.ObjectId,
