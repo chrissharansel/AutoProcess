@@ -23,7 +23,7 @@
 // }
 // const AgentSchema = new Schema<IAgent>({
 //   name: { type: String, required: true }, description: String,
-//   systemPrompt: { type: String, required: true }, model: { type: String, default: 'llama3.2:latest' },
+//   systemPrompt: { type: String, required: true }, model: { type: String, default: 'gpt-4o' },
 //   toolIds: [{ type: Schema.Types.ObjectId, ref: 'AgentTool' }],
 //   outputSchema: { type: Schema.Types.Mixed, default: {} }, maxIterations: { type: Number, default: 6, min: 1, max: 12 },
 //   isActive: { type: Boolean, default: true }, userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
@@ -137,7 +137,7 @@ const AgentSchema = new Schema<IAgent>(
     name: { type: String, required: true },
     description: String,
     systemPrompt: { type: String, required: true },
-    model: { type: String, default: 'llama3.2:latest' },
+    model: { type: String, default: 'gpt-4o' },
     toolIds: [
       { type: Schema.Types.ObjectId, ref: 'AgentTool' }
     ],

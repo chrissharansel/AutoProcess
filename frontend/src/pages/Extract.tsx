@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import api from '../lib/api';
 import { useAuth } from '../lib/auth';
 
-// Render the common Markdown returned by Ollama as real UI elements.
+// Render the common Markdown returned by the model as real UI elements.
 // This keeps **bold**, headings and list markers from appearing literally.
 function renderInlineMarkdown(text: string): ReactNode[] {
   const tokenPattern = /(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*]+\*)/g;
@@ -236,7 +236,7 @@ export default function Extract() {
       <header className="page-header">
         <div>
           <h1>Document Extraction</h1>
-          <p className="subtitle">Upload a PDF, image or text file. OCR + local Ollama extracts structured data</p>
+          <p className="subtitle">Upload a PDF, image or text file. OCR + GitHub Copilot extracts structured data</p>
         </div>
       </header>
 
@@ -283,7 +283,7 @@ export default function Extract() {
                 <input type="radio" name="agent" checked={!agentId} onChange={() => setAgentId('')} />
                 <div>
                   <strong>Standard extraction</strong>
-                  <div className="muted">OCR + Ollama extract only (no tool calling)</div>
+                  <div className="muted">OCR + Copilot extract only (no tool calling)</div>
                 </div>
               </label>
               {agents.filter((a) => a.isActive !== false).map((a) => (
@@ -291,7 +291,7 @@ export default function Extract() {
                   <input type="radio" name="agent" checked={agentId === (a._id || a.id)} onChange={() => setAgentId(a._id || a.id)} />
                   <div>
                     <strong>{a.name}</strong>
-                    <div className="muted">{a.model || 'llama3.2:latest'} · {(a.toolIds || []).length} tool{(a.toolIds || []).length === 1 ? '' : 's'} attached</div>
+                    <div className="muted">{a.model || 'gpt-4o'} · {(a.toolIds || []).length} tool{(a.toolIds || []).length === 1 ? '' : 's'} attached</div>
                   </div>
                 </label>
               ))}
@@ -495,7 +495,7 @@ export default function Extract() {
                   {chatLoading ? 'Thinking…' : 'Send'}
                 </button>
               </form>
-              <p className="chat-footnote">Powered by your local Ollama model · Enter to send · Shift + Enter for a new line</p>
+              <p className="chat-footnote">Powered by your GitHub Copilot model · Enter to send · Shift + Enter for a new line</p>
             </section>
           )}
         </div>

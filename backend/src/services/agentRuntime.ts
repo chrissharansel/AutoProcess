@@ -1,7 +1,6 @@
 import { AgentTool } from '../models/agent';
 import net from 'net';
-
-const OLLAMA_BASE = (process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
+import { chatCompletion, getLlmConfig } from './llm';
 
 function interpolate(value: string): string {
   return value.replace(/\{\{ENV:([A-Z0-9_]+)\}\}/g, (_m, key) => process.env[key] || '');
@@ -70,25 +69,40 @@ export async function executeHttpTool(tool: any, args: Record<string, any>) {
 
 export async function runAgent(agent: any, userInput: string, context: any, onStep: (step: any) => void) {
   const tools = await AgentTool.find({ _id: { $in: agent.toolIds || [] }, workspaceId: agent.workspaceId, enabled: true }).lean();
-  const ollamaTools = tools.map((t: any) => ({ type: 'function', function: {
+  const openAiTools = tools.map((t: any) => ({ type: 'function' as const, function: {
     name: t.functionName || t.name, description: t.description,
     parameters: t.parameters || { type: 'object', properties: {} },
   }}));
+  const defaultModel = getLlmConfig().defaultModel;
   const messages: any[] = [
-    { role: 'system', content: `${agent.systemPrompt}\n\nYou are operating in an agent runtime. Use available tools when needed; do not claim a tool was called unless you actually call it. Treat tool results as authoritative for their returned fields. If a tool returns an error or no match, explain it. Never invent missing data.\n\nOUTPUT SCHEMA (when relevant):\n${JSON.stringify(agent.outputSchema || {}, null, 2)}\n\nDOCUMENT / TASK CONTEXT:\n${JSON.stringify(context || {}, null, 2).slice(0, 30000)}` },
+    { role: 'system', content: `${agent.systemPrompt}\n\nYou are operating in an agent runtime powered by GitHub Copilot. Use available tools when needed; do not claim a tool was called unless you actually call it. Treat tool results as authoritative for their returned fields. If a tool returns an error or no match, explain it. Never invent missing data.\n\nOUTPUT SCHEMA (when relevant):\n${JSON.stringify(agent.outputSchema || {}, null, 2)}\n\nDOCUMENT / TASK CONTEXT:\n${JSON.stringify(context || {}, null, 2).slice(0, 30000)}` },
     { role: 'user', content: userInput },
   ];
   const trace: any[] = [];
   for (let iteration = 0; iteration < Math.min(Number(agent.maxIterations || 6), 12); iteration++) {
-    const response = await fetch(`${OLLAMA_BASE}/api/chat`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: agent.model || process.env.OLLAMA_MODEL || 'llama3.2:latest', messages, tools: ollamaTools, stream: false, options: { temperature: 0.1 } }),
-      signal: AbortSignal.timeout(Number(process.env.AGENT_LLM_TIMEOUT_MS || 120000)),
+    const { message } = await chatCompletion({
+      model: agent.model || defaultModel,
+      temperature: typeof agent.temperature === 'number' ? agent.temperature : 0.1,
+      messages,
+      tools: openAiTools.length ? openAiTools : undefined,
+      tool_choice: openAiTools.length ? 'auto' : undefined,
     });
-    if (!response.ok) throw new Error(`Ollama ${response.status}: ${await response.text()}`);
-    const payload: any = await response.json();
-    const message = payload.message || {};
-    messages.push(message);
+    // Keep assistant message with tool_calls for the protocol
+    const assistantMsg: any = {
+      role: 'assistant',
+      content: message.content || null,
+    };
+    if (message.tool_calls?.length) assistantMsg.tool_calls = message.tool_calls.map((tc: any, i: number) => ({
+      id: tc.id || `call_${iteration}_${i}`,
+      type: 'function',
+      function: {
+        name: tc.function?.name,
+        arguments: typeof tc.function?.arguments === 'string'
+          ? tc.function.arguments
+          : JSON.stringify(tc.function?.arguments || {}),
+      },
+    }));
+    messages.push(assistantMsg);
     const calls = message.tool_calls || [];
     if (!calls.length) return { output: message.content || '', steps: trace };
     for (const call of calls) {
@@ -99,7 +113,7 @@ export async function runAgent(agent: any, userInput: string, context: any, onSt
       if (!tool) {
         const result = { error: `Tool ${name} is not registered or enabled.` };
         trace.push({ type: 'tool', name, arguments: args, result, status: 'error' });
-        messages.push({ role: 'tool', name, content: JSON.stringify(result) });
+        messages.push({ role: 'tool', tool_call_id: call.id || `call_${iteration}_${name}`, name, content: JSON.stringify(result) });
         onStep(trace[trace.length - 1]);
         continue;
       }
@@ -108,12 +122,12 @@ export async function runAgent(agent: any, userInput: string, context: any, onSt
         const result = await executeHttpTool(tool, args);
         const step = { type: 'tool', name, arguments: args, result, status: 'success', durationMs: Date.now() - started };
         trace.push(step); onStep(step);
-        messages.push({ role: 'tool', name, content: JSON.stringify(result).slice(0, 20000) });
+        messages.push({ role: 'tool', tool_call_id: call.id || `call_${iteration}_${name}`, name, content: JSON.stringify(result).slice(0, 20000) });
       } catch (error: any) {
         const result = { error: error.message || String(error) };
         const step = { type: 'tool', name, arguments: args, result, status: 'error', durationMs: Date.now() - started };
         trace.push(step); onStep(step);
-        messages.push({ role: 'tool', name, content: JSON.stringify(result) });
+        messages.push({ role: 'tool', tool_call_id: call.id || `call_${iteration}_${name}`, name, content: JSON.stringify(result) });
       }
     }
   }

@@ -1,3 +1,30 @@
+# AutoProcess — GitHub Copilot + Tesseract OCR
+
+This application uses **GitHub Copilot** (via an OpenAI-compatible gateway) for all LLM work.
+Local **Ollama is not used**.
+
+## LLM setup (required)
+
+1. Install and sign in to a Copilot OpenAI-compatible proxy, for example:
+
+```bash
+npx @jeffreycao/copilot-api@latest start
+```
+
+Default URL: `http://127.0.0.1:4141`
+
+2. In `backend/.env`:
+
+```env
+COPILOT_BASE_URL="http://127.0.0.1:4141"
+COPILOT_MODEL="gpt-4o"
+# COPILOT_API_KEY=   # only if your proxy needs it
+# GITHUB_TOKEN=
+```
+
+3. OCR still uses local Tesseract + PyMuPDF (not cloud AI).
+
+
 # AutoProcess — Ollama 0.40.x + Tesseract OCR
 
 This project has been adjusted for the existing local setup:

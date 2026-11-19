@@ -75,7 +75,7 @@ export default function AgentStudio() {
   const [name, setName] = useState('Petmate AP Invoice Agent');
   const [description, setDescription] = useState('Extract, enrich and validate AP invoices using Oracle tools.');
   const [prompt, setPrompt] = useState(AP_PROMPT);
-  const [model, setModel] = useState('llama3.2:latest');
+  const [model, setModel] = useState('gpt-4o');
   const [selectedTools, setSelectedTools] = useState<string[]>([]);
   const [schema, setSchema] = useState(JSON.stringify(OUTPUT_SCHEMA, null, 2));
   const [maxIterations, setMaxIterations] = useState(6);
@@ -113,7 +113,7 @@ export default function AgentStudio() {
 
   const editAgent = (a: any) => {
     setSelectedAgent(a); setName(a.name); setDescription(a.description || ''); setPrompt(a.systemPrompt);
-    setModel(a.model || 'llama3.2:latest'); setSelectedTools((a.toolIds || []).map((t: any) => typeof t === 'string' ? t : t._id || t.id));
+    setModel(a.model || 'gpt-4o'); setSelectedTools((a.toolIds || []).map((t: any) => typeof t === 'string' ? t : t._id || t.id));
     setSchema(JSON.stringify(a.outputSchema || {}, null, 2)); setMaxIterations(a.maxIterations || 6); setTab('agents');
   };
   const saveAgent = async () => {
@@ -165,10 +165,10 @@ export default function AgentStudio() {
     {tab==='agents' && <div style={{display:'grid',gridTemplateColumns:'minmax(240px, .8fr) minmax(400px, 2fr)',gap:20}}>
       <section className="studio-card" style={{padding:18}}><h3>Saved agents</h3>{agents.map(a=><button key={a._id || a.id} onClick={()=>editAgent(a)} className="studio-secondary" style={{width:'100%',textAlign:'left',margin:'6px 0',display:'block'}}><strong>{a.name}</strong><div className="muted" style={{fontSize:12}}>{a.model} · {(a.toolIds||[]).length} tools</div></button>)}{!agents.length&&<p className="muted">No agents yet. Create your first agent.</p>}</section>
       <section className="studio-card" style={{padding:20}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><h2>{selectedAgent?'Edit agent':'Create agent'}</h2><button className="studio-secondary" onClick={()=>{setPrompt(AP_PROMPT);setSchema(JSON.stringify(OUTPUT_SCHEMA,null,2));setName('Petmate AP Invoice Agent');setDescription('Extract, enrich and validate AP invoices using Oracle tools.');setModel('llama3.2:latest');setMaxIterations(6);}}>Load AP invoice template</button></div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><h2>{selectedAgent?'Edit agent':'Create agent'}</h2><button className="studio-secondary" onClick={()=>{setPrompt(AP_PROMPT);setSchema(JSON.stringify(OUTPUT_SCHEMA,null,2));setName('Petmate AP Invoice Agent');setDescription('Extract, enrich and validate AP invoices using Oracle tools.');setModel('gpt-4o');setMaxIterations(6);}}>Load AP invoice template</button></div>
         <label>Agent name</label><input className="studio-input" value={name} onChange={e=>setName(e.target.value)}/>
         <label>Description</label><input className="studio-input" value={description} onChange={e=>setDescription(e.target.value)}/>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 150px',gap:12}}><div><label>Model</label><input className="studio-input" value={model} onChange={e=>setModel(e.target.value)} placeholder="llama3.2:latest"/></div><div><label>Max tool rounds</label><input className="studio-input" type="number" min={1} max={12} value={maxIterations} onChange={e=>setMaxIterations(Number(e.target.value))}/></div></div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 150px',gap:12}}><div><label>Model</label><input className="studio-input" value={model} onChange={e=>setModel(e.target.value)} placeholder="gpt-4o"/></div><div><label>Max tool rounds</label><input className="studio-input" type="number" min={1} max={12} value={maxIterations} onChange={e=>setMaxIterations(Number(e.target.value))}/></div></div>
         <label>System prompt / agent instructions</label><textarea className="studio-input" style={{minHeight:320,fontFamily:'monospace',fontSize:13}} value={prompt} onChange={e=>setPrompt(e.target.value)}/>
         <label>Attach tools</label><div style={{display:'flex',flexWrap:'wrap',gap:10,padding:'10px 0'}}>{tools.map(t=><label key={t._id || t.id} style={{display:'flex',gap:6,alignItems:'center'}}><input type="checkbox" checked={selectedTools.includes(t._id || t.id)} onChange={e=>setSelectedTools(old=>e.target.checked?[...old,t._id||t.id]:old.filter(x=>x!==(t._id||t.id)))}/>{t.name}</label>)}</div>
         <label>Output JSON schema / shape</label><textarea className="studio-input" style={{minHeight:230,fontFamily:'monospace',fontSize:12}} value={schema} onChange={e=>setSchema(e.target.value)}/>

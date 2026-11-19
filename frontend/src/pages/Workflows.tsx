@@ -5,7 +5,7 @@ import { useAuth } from '../lib/auth';
 const STEP_TYPES = [
   { type: 'document_upload', label: 'Document upload', desc: 'Accept PDF / image upload' },
   { type: 'ocr', label: 'OCR / text extract', desc: 'PyMuPDF + Tesseract when needed' },
-  { type: 'llm_extract', label: 'LLM extraction', desc: 'Structured fields via Ollama' },
+  { type: 'llm_extract', label: 'LLM extraction', desc: 'Structured fields via GitHub Copilot' },
   { type: 'agent_run', label: 'Agent + tools', desc: 'Tool-calling agent loop' },
   { type: 'api_tool', label: 'API tool call', desc: 'Call a registered HTTP tool' },
   { type: 'condition', label: 'Conditional branch', desc: 'If / else on field values' },

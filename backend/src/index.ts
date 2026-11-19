@@ -10,6 +10,7 @@ import jobRoutes from './routes/jobs';
 import documentRoutes from './routes/documents';
 import agentRoutes from './routes/agents';
 import { errorHandler } from './middleware/errorHandler';
+import { testConnection, getLlmConfig } from './services/llm';
 import { authenticate } from './middleware/auth';
 
 dotenv.config();
@@ -31,7 +32,12 @@ app.use('/api/documents', authenticate, documentRoutes);
 app.use('/api/agents', authenticate, agentRoutes);
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'AutoProcess API', version: '1.0.0', db: 'mongodb' });
+  res.json({ status: 'ok', service: 'AutoProcess API', version: '1.0.0', db: 'mongodb', llm: getLlmConfig() });
+});
+
+app.get('/api/health/llm', async (_req, res) => {
+  const result = await testConnection();
+  res.status(result.ok ? 200 : 503).json(result);
 });
 
 app.use(errorHandler);

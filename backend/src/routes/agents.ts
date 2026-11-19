@@ -70,7 +70,7 @@ router.post('/', async (req: AuthRequest, res, next) => {
     const { workspaceId, name, description, systemPrompt, model, toolIds, outputSchema, maxIterations, isActive } = req.body || {};
     if (!workspaceId || !name || !systemPrompt) return res.status(400).json({ error: 'workspaceId, name and systemPrompt are required.' });
     const validTools = await AgentTool.find({ _id: { $in: toolIds || [] }, workspaceId, userId: req.userId }).select('_id').lean();
-    const agent = await Agent.create({ workspaceId, userId: req.userId, name, description, systemPrompt, model: model || 'llama3.2:latest', toolIds: validTools.map((t: any) => t._id), outputSchema: outputSchema || {}, maxIterations: maxIterations || 6, isActive: isActive !== false });
+    const agent = await Agent.create({ workspaceId, userId: req.userId, name, description, systemPrompt, model: model || 'gpt-4o', toolIds: validTools.map((t: any) => t._id), outputSchema: outputSchema || {}, maxIterations: maxIterations || 6, isActive: isActive !== false });
     res.status(201).json(agent);
   } catch (e) { next(e); }
 });
