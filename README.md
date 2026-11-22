@@ -231,3 +231,32 @@ The historical-distribution endpoint was not supplied. In Tool Registry, use **P
 - `GET /api/agents/executions/:executionId?workspaceId=...`
 
 Install backend/frontend dependencies using `npm install` in each folder, then start them using `npm run dev`.
+
+
+## GitHub Copilot CLI setup (same approach as ApplyAI)
+
+AutoProcess uses the GitHub Copilot CLI as its LLM provider. It does not use the
+`127.0.0.1:4141` Copilot proxy or the direct Copilot token-exchange API.
+
+1. Install GitHub Copilot CLI (Node.js 22+):
+   ```bash
+   npm install -g @github/copilot
+   ```
+2. Authenticate using the same GitHub account used by ApplyAI:
+   ```bash
+   gh auth login
+   ```
+   Alternatively, run `copilot` and enter `/login`.
+3. Verify the CLI:
+   ```bash
+   copilot --version
+   copilot
+   ```
+4. In `backend/.env`, set `COPILOT_BIN=copilot`. Leave `COPILOT_MODEL` blank to use
+   the Copilot CLI default, or set a model available to your account.
+5. Restart the AutoProcess backend.
+
+The CLI is invoked in silent/headless mode with shell and write tools denied.
+AutoProcess's own registered HTTP tools continue to be executed by its backend
+agent runtime. No `COPILOT_BASE_URL`, port 4141 proxy, or GitHub token pasted
+into `.env` is needed.

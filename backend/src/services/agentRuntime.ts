@@ -73,7 +73,8 @@ export async function runAgent(agent: any, userInput: string, context: any, onSt
     name: t.functionName || t.name, description: t.description,
     parameters: t.parameters || { type: 'object', properties: {} },
   }}));
-  const defaultModel = getLlmConfig().defaultModel;
+  const configuredDefaultModel = getLlmConfig().defaultModel;
+  const defaultModel = configuredDefaultModel || undefined;
   const messages: any[] = [
     { role: 'system', content: `${agent.systemPrompt}\n\nYou are operating in an agent runtime powered by GitHub Copilot. Use available tools when needed; do not claim a tool was called unless you actually call it. Treat tool results as authoritative for their returned fields. If a tool returns an error or no match, explain it. Never invent missing data.\n\nOUTPUT SCHEMA (when relevant):\n${JSON.stringify(agent.outputSchema || {}, null, 2)}\n\nDOCUMENT / TASK CONTEXT:\n${JSON.stringify(context || {}, null, 2).slice(0, 30000)}` },
     { role: 'user', content: userInput },

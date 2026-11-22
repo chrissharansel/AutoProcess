@@ -3,7 +3,7 @@
  *
  * Text PDFs: pdf-parse text layer where available.
  * Scanned PDFs/images: render PDF pages with PyMuPDF, then OCR with Tesseract.
- * Final structured extraction: GitHub Copilot via OpenAI-compatible gateway (llm.ts).
+ * Final structured extraction: GitHub Copilot CLI (same authentication path as ApplyAI).
  * Local Ollama is no longer used.
  */
 import fs from 'fs/promises';
@@ -127,11 +127,6 @@ function isGarbageText(text: string): boolean {
   const sample = text.slice(0, 4000);
   const useful = (sample.match(/[A-Za-z0-9]/g) || []).length;
   return useful / Math.max(sample.length, 1) < 0.12;
-}
-
-function isConnError(err: any): boolean {
-  const msg = String(err?.message || '');
-  return msg.includes('ECONNREFUSED') || msg.includes('fetch failed') || err?.cause?.code === 'ECONNREFUSED';
 }
 
 function findTesseract(): string {
@@ -342,11 +337,9 @@ export async function extractFromText(
       rawText: text,
     };
   } catch (err: any) {
-    console.error('[extract] GitHub Copilot text extraction failed:', err.message);
-    if (isConnError(err)) {
-      const cfg = getLlmConfig();
-      throw new Error(`Cannot connect to GitHub Copilot gateway at ${cfg.baseUrl}. Start a Copilot OpenAI-compatible proxy (npx @jeffreycao/copilot-api@latest start) and set COPILOT_BASE_URL if needed. Model: ${cfg.defaultModel}`);
-    }
+    console.error('[extract] GitHub Copilot CLI text extraction failed:', err.message);
+    // Do not rewrite CLI authentication/installation errors as proxy errors.
+    // The CLI service returns the actionable message (install/login/timeout).
     throw err;
   }
 }
