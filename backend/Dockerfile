@@ -1,6 +1,6 @@
 
 FROM node:22-bookworm-slim
-
+RUN npm install -g @github/copilot
 # Install OCR and Python system dependencies
 RUN apt-get update && apt-get install -y \
     python3 \
