@@ -1,4 +1,4 @@
-# Install in the Python environment used by AutoProcess backend
-pymupdf>=1.24.0
-pytesseract>=0.3.10
-Pillow>=10.0.0
+# Keep PyMuPDF on the stable 1.x API used by the OCR helper.
+pymupdf>=1.24.0,<2.0
+pytesseract>=0.3.10,<0.4
+Pillow>=10.0.0,<14.0.0

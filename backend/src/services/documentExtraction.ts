@@ -189,7 +189,7 @@ async function runOcrHelper(filePath: string, mimeType: string): Promise<TextAcq
   try {
     const result = await execFileAsync(python, [scriptPath, filePath, mimeType], {
       cwd: path.dirname(scriptPath),
-      timeout: Number(process.env.OCR_TIMEOUT_MS || 180000),
+      timeout: Number(process.env.OCR_TIMEOUT_MS || 600000),
       maxBuffer: 20 * 1024 * 1024,
       windowsHide: true,
       encoding: 'utf8',
@@ -213,7 +213,15 @@ async function runOcrHelper(filePath: string, mimeType: string): Promise<TextAcq
       }
     }
     const stderr = String(error?.stderr || '').trim();
-    throw new Error(`OCR processing failed. Verify Python, PyMuPDF, Pillow, pytesseract and Tesseract. ${stderr || error?.message || ''}`.trim());
+    const details = [
+      error?.killed || error?.code === 'ETIMEDOUT' ? 'OCR process timed out.' : '',
+      error?.code && error.code !== 'ETIMEDOUT' ? `Process code: ${error.code}.` : '',
+      error?.signal ? `Signal: ${error.signal}.` : '',
+      stderr ? `stderr: ${stderr.slice(-3000)}` : '',
+      output ? `stdout: ${output.slice(-3000)}` : '',
+      error?.message ? `Process error: ${error.message}` : '',
+    ].filter(Boolean).join(' ');
+    throw new Error(`OCR processing failed. Check Python, PyMuPDF, Pillow, pytesseract and Tesseract. ${details || 'No diagnostic output was returned.'}`.trim());
   }
 
   let parsed: any;
