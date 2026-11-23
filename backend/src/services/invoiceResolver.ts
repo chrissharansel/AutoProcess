@@ -6,7 +6,7 @@ export interface InvoiceCandidate {
   snippet: string;
 }
 
-const INV_LABEL = String.raw`(?:\binvoice\b|\binv\b\.?)\s*(?:#|no\.?|number|num|nbr)?`;
+const INV_LABEL = String.raw`(?:invoice\s*(?:number|no\.?|#|num|nbr)?|inv\.?\s*(?:number|no\.?|#|num|nbr)?)`;
 const VALUE = String.raw`([A-Z0-9][A-Z0-9\-/]{1,24})`;
 const STOP = new Set([
   'DATE', 'NUMBER', 'NO', 'NUM', 'TOTAL', 'AMOUNT', 'DUE', 'TERMS', 'PAGE',

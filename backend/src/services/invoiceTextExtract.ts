@@ -6,7 +6,8 @@ import { findPoCandidates } from './poResolver';
 import { findInvoiceCandidates } from './invoiceResolver';
 
 const BUYER_NAMES = [
-  'petmate', 'doskocil', 'sam-spectrum', 'sam spectrum', 'spectrum polymers',
+  'petmate', 'doskocil', 'doskocil mfg', 'dba petmate',
+  'sam-spectrum', 'sam spectrum', 'spectrum polymers',
 ];
 
 function linesOf(text: string): string[] {
@@ -46,23 +47,34 @@ function isBuyer(name: string): boolean {
   return BUYER_NAMES.some((b) => n.includes(b));
 }
 
-/** Heuristic supplier: first substantial letter line that is not buyer / address-only / label. */
+/** Heuristic supplier: vendor branding / remit-from — never the buyer (Petmate/Doskocil). */
 function extractSupplier(text: string): string {
-  const skip = /^(invoice|bill\s*to|ship\s*to|remit|page\s*\d|date|total|po\b|purchase|customer|account|phone|fax|email|www\.|http)/i;
-  for (const line of linesOf(text).slice(0, 40)) {
-    if (line.length < 3 || line.length > 80) continue;
+  const lines = linesOf(text);
+  const skip = /^(invoice|bill\s*to|ship\s*to|sold\s*to|remit\s*to|page\s*\d|date|total|po\b|purchase|customer|account|phone|fax|email|www\.|http|qty|quantity|description|unit\s*price)/i;
+
+  // Prefer explicit Vendor / From / Supplier / Remit From labels
+  const labelRe = /^(?:vendor|supplier|from|remit\s*from|sold\s*by|payee)\s*[:#]?\s*(.+)$/i;
+  for (const line of lines.slice(0, 50)) {
+    const m = line.match(labelRe);
+    if (m?.[1] && !isBuyer(m[1]) && m[1].length >= 3) return m[1].replace(/\s{2,}/g, ' ').trim();
+  }
+
+  // Top-of-page company name that is NOT the buyer
+  for (const line of lines.slice(0, 40)) {
+    if (line.length < 3 || line.length > 90) continue;
     if (skip.test(line)) continue;
     if (/^\d+$/.test(line)) continue;
     if (!/[A-Za-z]{3,}/.test(line)) continue;
     if (isBuyer(line)) continue;
-    // Prefer lines that look like company names
-    if (/llc|inc|ltd|corp|co\.|company|services|supply|rental|manufactur/i.test(line) || /^[A-Z][A-Za-z0-9&.,'\- ]{2,}$/.test(line)) {
+    if (/llc|inc\.?|ltd|corp\.?|co\.|company|services|supply|rental|manufactur|industries|group|partners/i.test(line)
+      || /^[A-Z][A-Za-z0-9&.,'\- ]{2,}$/.test(line)) {
       return line.replace(/\s{2,}/g, ' ').trim();
     }
   }
-  // fallback: first non-skip letter line
-  for (const line of linesOf(text).slice(0, 25)) {
-    if (line.length >= 3 && /[A-Za-z]{3,}/.test(line) && !skip.test(line) && !isBuyer(line)) return line;
+  for (const line of lines.slice(0, 25)) {
+    if (line.length >= 3 && /[A-Za-z]{3,}/.test(line) && !skip.test(line) && !isBuyer(line)) {
+      return line.replace(/\s{2,}/g, ' ').trim();
+    }
   }
   return '';
 }
@@ -259,12 +271,31 @@ export function recoverHeaderFromText(header: any, text: string): { header: any;
     if (inv[0]) {
       h.invoice_num = inv[0].value;
       notes.push(`invoice_num recovered from labelled text: ${inv[0].value}`);
+    } else {
+      // Extra patterns: "Invoice Number 12345", "INVOICE #12345", table cells
+      const extra = [
+        /\binvoice\s*(?:number|no\.?|#)?\s*[:#.\-]?\s*([A-Z0-9][A-Z0-9\-]{2,20})/i,
+        /\binv\.?\s*(?:number|no\.?|#)?\s*[:#.\-]?\s*([A-Z0-9][A-Z0-9\-]{2,20})/i,
+      ];
+      for (const re of extra) {
+        const m = text.match(re);
+        if (m?.[1] && !/^(date|total|amount|due|no|number)$/i.test(m[1]) && m[1] !== po) {
+          h.invoice_num = m[1];
+          notes.push(`invoice_num recovered via fallback pattern: ${m[1]}`);
+          break;
+        }
+      }
     }
   }
 
+  // Reject buyer entities mistaken for the vendor (Petmate / Doskocil / etc.)
+  if (!blank(h.supplier_name) && isBuyer(String(h.supplier_name))) {
+    notes.push(`supplier_name "${h.supplier_name}" is the buyer — cleared for re-extraction`);
+    h.supplier_name = '';
+  }
   if (blank(h.supplier_name)) {
     const s = extractSupplier(text);
-    if (s) {
+    if (s && !isBuyer(s)) {
       h.supplier_name = s;
       notes.push(`supplier_name recovered from document header: ${s}`);
     }
@@ -283,6 +314,14 @@ export function recoverHeaderFromText(header: any, text: string): { header: any;
     if (a != null) {
       h.invoice_amount = a;
       notes.push(`invoice_amount recovered: ${a}`);
+    }
+  }
+
+  if (blank(h.payment_terms)) {
+    const tm = text.match(/\b((?:net|n)\s*\/?\s*\d{1,3}(?:\s*days?)?|due\s*on\s*receipt|cod|prepaid)\b/i);
+    if (tm) {
+      h.payment_terms = tm[1].replace(/\s+/g, ' ').trim().toUpperCase().replace(/N\s*\/?\s*(\d)/, 'NET $1');
+      notes.push(`payment_terms recovered: ${h.payment_terms}`);
     }
   }
 
