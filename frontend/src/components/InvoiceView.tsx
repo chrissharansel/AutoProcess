@@ -7,7 +7,7 @@ const money = (v: any) => (typeof v === 'number' ? v.toLocaleString(undefined, {
 const conv = (key: string, kind: Kind, raw: string) => (kind === 'number' ? (raw.trim() === '' ? null : Number.isFinite(Number(raw)) ? Number(raw) : raw) : raw === '' ? (EMPTY_STRING_KEYS.has(key) ? '' : null) : raw);
 const blankish = (v: any) => v === null || v === undefined || v === '';
 
-const MORE_HEADER: Array<[string, string, Kind]> = [['invoice_description', 'Invoice description', 'text'], ['invoice_currency', 'Currency', 'text'], ['supplier_number', 'Supplier number', 'text'], ['supplier_id', 'Supplier ID', 'number'], ['supplier_site_id', 'Supplier site ID', 'number'], ['supplier_site', 'Supplier site', 'text'], ['attachement_url', 'Attachment URL', 'text']];
+const MORE_HEADER: Array<[string, string, Kind]> = [['invoice_description', 'Invoice description', 'text'], ['invoice_currency', 'Invoice currency *', 'text'], ['supplier_number', 'Supplier number *', 'text'], ['supplier_id', 'Supplier ID *', 'number'], ['supplier_site_id', 'Supplier site ID *', 'number'], ['supplier_site', 'Supplier site *', 'text'], ['attachement_url', 'Attachment URL', 'text']];
 const LINE_DETAIL: Array<[string, string, Kind]> = [['line_type', 'Type', 'text'], ['item_number', 'Item number', 'text'], ['po_number', 'PO number', 'text'], ['po_line_number', 'PO line', 'text'], ['unit_measure', 'UOM', 'text'], ['requestor', 'Requestor', 'text'], ['code_combination_id', 'Code combination ID', 'text'], ['default_distribution_account', 'Distribution account', 'text']];
 
 const MATCH_CHIP: Record<string, [string, string]> = { matched: ['green', 'Matched'], manual: ['blue', 'Manual'], ambiguous: ['amber', 'Ambiguous'], unmatched: ['red', 'No PO line'], not_applicable: ['', ''] };
@@ -59,15 +59,15 @@ export default function InvoiceView({ output, enrichment, validation, editing, o
       {invoices.length > 1 && <div className="seg">{invoices.map((_: any, i: number) => <button key={i} className={i === idx ? 'on' : ''} onClick={() => setIdx(i)}>Invoice {i + 1}</button>)}</div>}
 
       <div className="figs-wrap"><div className="figs">
-        <Fig k="supplier_name" label="Supplier" tag={chip('supplier_name')} />
-        <Fig k="invoice_num" label="Invoice #" />
-        <Fig k="invoice_date" label="Date" kind="date" />
-        <Fig k="invoice_amount" label="Amount" kind="number" big />
+        <Fig k="supplier_name" label="Supplier Name *" tag={chip('supplier_name')} />
+        <Fig k="invoice_num" label="Invoice Number *" />
+        <Fig k="invoice_date" label="Invoice Date *" kind="date" />
+        <Fig k="invoice_amount" label="Invoice Amount *" kind="number" big />
         <div><div className="k">PO number {en?.po_number && en.lookup?.status === 'matched' && <span className="chip blue">In Oracle</span>}{en?.po_number && en.lookup?.status && en.lookup.status !== 'matched' && en.lookup.status !== 'skipped' && <span className="chip amber">Not confirmed</span>}</div>
           <div className={`v ${en?.po_number ? '' : 'missing'}`}>{en?.po_number || 'None (non-PO invoice)'}</div>
           {en?.po_resolution?.source === 'rules' && <div className="hint" title={JSON.stringify(en.po_resolution.candidates?.[0]?.snippet)}>Found next to a PO label</div>}
           {en?.po_resolution?.source === 'oracle_confirmed' && <div className="hint">Candidate confirmed in Oracle</div>}</div>
-        <Fig k="payment_terms" label="Terms" tag={chip('payment_terms')} />
+        <Fig k="payment_terms" label="Payment Terms *" tag={chip('payment_terms')} />
       </div></div>
 
       <div className="panel" style={{ padding: 0, overflow: 'hidden' }}>
@@ -75,7 +75,7 @@ export default function InvoiceView({ output, enrichment, validation, editing, o
           <span className="muted">Lines total {money(Number(lineTotal.toFixed(2)))}{!blankish(h.invoice_amount) && Math.abs(lineTotal - Number(h.invoice_amount)) > 0.05 && <span className="chip red" style={{ marginLeft: 8 }}>differs from invoice amount</span>}</span></div>
         <div className="scroll-x">
           <table className="tbl roomy">
-            <thead><tr><th>#</th><th>Description</th><th className="num">Qty</th><th className="num">Unit price</th><th className="num">Amount</th><th>PO line</th><th /></tr></thead>
+            <thead><tr><th>Invoice line #</th><th>PO number</th><th>Line type</th><th>Item number</th><th>Description</th><th className="num">Qty</th><th className="num">Unit price</th><th className="num">Line amount</th><th>UOM</th><th>Requestor</th><th>Default distribution account</th><th>Code combination ID</th><th>PO line #</th><th /></tr></thead>
             <tbody>
               {lines.map((ln, i) => {
                 const m = matchOf(ln.invoice_line_number); const [mc, ml] = MATCH_CHIP[m?.status || 'not_applicable'] || ['', ''];
@@ -84,9 +84,16 @@ export default function InvoiceView({ output, enrichment, validation, editing, o
                 return (<>
                   <tr key={`r${i}`} style={needs ? { background: 'color-mix(in srgb, var(--warning) 9%, transparent)' } : undefined}>
                     <td>{ln.invoice_line_number}</td>
+                    <td>{blankish(ln.po_number) ? '—' : ln.po_number}</td>
+                    <td>{blankish(ln.line_type) ? '—' : ln.line_type}</td>
+                    <td>{blankish(ln.item_number) ? '—' : ln.item_number}</td>
                     <td style={{ minWidth: 220 }}>{editing ? <input className="input" aria-label={`Description line ${i + 1}`} value={ln.line_description ?? ''} onChange={(e) => set((x) => { x.lines[i].line_description = e.target.value; })} />
                       : <>{blankish(ln.line_description) ? <span className="muted">—</span> : ln.line_description}<div className="hint">{[ln.line_type, ln.item_number && `Item ${ln.item_number}`].filter(Boolean).join(' · ')}</div></>}</td>
                     {(['quantity', 'unit_price', 'amount'] as const).map((k) => <td key={k} className="num">{editing ? <input className="input" style={{ minWidth: 80, textAlign: 'right' }} aria-label={`${k} line ${i + 1}`} value={ln[k] ?? ''} onChange={(e) => set((x) => { x.lines[i][k] = conv(k, 'number', e.target.value); })} /> : blankish(ln[k]) ? <span className="muted">—</span> : money(ln[k])}</td>)}
+                    <td>{blankish(ln.unit_measure) ? '—' : ln.unit_measure}</td>
+                    <td>{blankish(ln.requestor) ? '—' : ln.requestor}</td>
+                    <td>{blankish(ln.default_distribution_account) ? '—' : ln.default_distribution_account}</td>
+                    <td>{blankish(ln.code_combination_id) ? '—' : ln.code_combination_id}</td>
                     <td style={{ minWidth: 200 }}>
                       {m && m.status !== 'not_applicable' ? <>
                         {canPick && (needs || picking.has(i)) ? (
@@ -101,7 +108,7 @@ export default function InvoiceView({ output, enrichment, validation, editing, o
                     <td className="num">{!editing && <button className="linkish" onClick={() => setOpen((s) => { const n = new Set(s); if (n.has(i)) n.delete(i); else n.add(i); return n; })} aria-expanded={isOpen}>{isOpen ? 'Hide' : 'Details'}</button>}</td>
                   </tr>
                   {isOpen && (
-                    <tr key={`d${i}`} className="sub"><td /><td colSpan={6}>
+                    <tr key={`d${i}`} className="sub"><td /><td colSpan={13}>
                       <dl className="kv">
                         {LINE_DETAIL.map(([k, l, kind]) => (
                           <div key={k}><dt>{l}</dt>{editing ? <dd><input className="input" aria-label={`${l} line ${i + 1}`} value={ln[k] ?? ''} onChange={(e) => set((x) => { x.lines[i][k] = conv(k, kind, e.target.value); })} /></dd> : <dd className={blankish(ln[k]) ? 'missing' : ''}>{blankish(ln[k]) ? '—' : String(ln[k])}</dd>}</div>

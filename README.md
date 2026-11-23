@@ -1,6 +1,6 @@
 # AutoProcess
 
-AutoProcess is an agentic document-processing platform using **GitHub Copilot CLI** for all LLM tasks, MongoDB for persistence, and embedded PDF text extraction for document reading.
+AutoProcess is an agentic document-processing platform using **GitHub Copilot CLI** for all LLM tasks, MongoDB for persistence, and embedded PDF text plus Tesseract OCR for document reading.
 
 ## AI provider
 
@@ -23,22 +23,20 @@ AutoProcess uses the same authenticated GitHub Copilot CLI session as ApplyAI. I
 5. Set `COPILOT_BIN` in `backend/.env` to the full executable path if the backend cannot resolve it, for example:
    ```env
    COPILOT_BIN=C:\Users\admin\AppData\Roaming\npm\copilot.cmd
-   COPILOT_MODEL=
+   COPILOT_MODEL=auto
    COPILOT_TIMEOUT=240
    ```
-   Leave `COPILOT_MODEL` blank to use the Copilot CLI default model.
+   `COPILOT_MODEL=auto` lets GitHub Copilot select an available model automatically.
 
 Copilot CLI runs headlessly. AutoProcess does not grant the model arbitrary shell or file-write access. Registered HTTP tools are executed by AutoProcess's deterministic backend runtime with its existing validation, approval, timeout and audit controls.
 
-## Document reading — OCR disabled
+## Document reading and OCR
 
-- Text-based PDFs: read their embedded text layer, then send the text to GitHub Copilot for structured extraction.
-- TXT, CSV and JSON: read as text, then send to GitHub Copilot.
-- Scanned/image-only PDFs: rejected with a clear message because OCR is disabled.
-- PNG/JPEG and other images: not supported because OCR is disabled.
-- No Tesseract, PyMuPDF rendering helper, OCR process, or vision-model fallback is used.
-
-A PDF containing only scanned page images does not contain selectable text. With OCR disabled, the application cannot read its invoice content. Use a text-based/searchable PDF or provide a text export.
+- PDFs: read the embedded text layer and run OCR across each page to recover content missed by partial or broken text layers.
+- Scanned/image-only PDFs: rendered and processed with Tesseract OCR.
+- PNG/JPEG invoices: processed with Tesseract OCR.
+- TXT, CSV and JSON: read directly as text.
+- GitHub Copilot CLI performs structured extraction after text acquisition; OCR does not replace the AI model.
 
 ## Setup
 
@@ -69,4 +67,32 @@ Configure MongoDB, JWT_SECRET and Oracle PO API credentials in `backend/.env`. N
 
 ## Important
 
-The `ocrText` field name remains in the existing MongoDB document model for backwards compatibility with saved records. In this version it stores extracted source text only; no OCR is performed.
+The `ocrText` field stores the text acquired from embedded PDF text and/or OCR. Extractor version metadata ensures older cached text is refreshed after this upgrade.
+
+
+## OCR setup for scanned invoices (Windows)
+
+AutoProcess reads a PDF's embedded text and also runs Tesseract OCR across its pages to recover text missed by partial or broken PDF text layers. PNG/JPG invoices are OCR'd directly. GitHub Copilot CLI remains the AI extraction engine; OCR only converts page images into text.
+
+1. Install the Tesseract OCR engine for Windows. A common executable path is `C:/Program Files/Tesseract-OCR/tesseract.exe`.
+2. In `backend`, install the Python OCR dependencies:
+   ```cmd
+   python -m pip install -r requirements-ocr.txt
+   ```
+3. In `backend/.env`, configure:
+   ```env
+   COPILOT_MODEL=auto
+   PYTHON_BIN=python
+   TESSERACT_PATH=C:/Program Files/Tesseract-OCR/tesseract.exe
+   TESSERACT_LANG=eng
+   OCR_MAX_PAGES=20
+   PDF_RENDER_DPI=250
+   OCR_TIMEOUT_MS=180000
+   ```
+4. Verify Tesseract from CMD:
+   ```cmd
+   "C:/Program Files/Tesseract-OCR/tesseract.exe" --version
+   ```
+5. Restart the backend and rerun the invoice. Cached text from the previous embedded-only extractor is refreshed automatically.
+
+If Tesseract is installed elsewhere, set `TESSERACT_PATH` to its actual `tesseract.exe` path.

@@ -63,8 +63,12 @@ function unwrap(payload: any): any | null {
 
 export function applyPoLine(line: any, po: any, poLine: any) {
   line.po_line_number = poLine.line_num !== null && poLine.line_num !== undefined ? String(poLine.line_num) : '';
-  if (str(poLine.item_number)) line.item_number = String(poLine.item_number);
-  line.unit_measure = str(poLine.uom) || '';
+  if (!str(line.item_number) && str(poLine.item_number)) line.item_number = String(poLine.item_number);
+  if (!str(line.line_description) && str(poLine.item_description)) line.line_description = String(poLine.item_description);
+  // Ordered PO quantity and price remain PO reference values; do not copy them into invoice values.
+  // Invoice quantity, unit price and amount must remain sourced from the invoice.
+  if (!str(line.unit_measure)) line.unit_measure = str(poLine.uom) || '';
+  else line.unit_measure = str(poLine.uom) || line.unit_measure;
   line.requestor = str(po?.requestor) || '';
   line.code_combination_id = poLine.code_combination_id !== null && poLine.code_combination_id !== undefined ? String(poLine.code_combination_id) : '';
   line.default_distribution_account = str(poLine.default_distribution_account) || '';
@@ -190,11 +194,9 @@ export async function postProcessApInvoice(c: ApCtx) {
       const bad = en.pos.find((p: any) => p.lookup.status !== 'matched');
       en.lookup = bad ? { type: 'po_number', status: bad.lookup.status === 'mismatch' ? 'mismatch' : bad.lookup.status === 'not_attached' ? 'error' : bad.lookup.status, error: bad.lookup.error } : { type: 'po_number', status: 'matched' };
       if (applied.length > 1 && new Set(applied.map((a) => String(a.oracle.supplier_id ?? a.oracle.supplier))).size > 1) { reasons.push(`The POs on this invoice belong to different suppliers${label}`); applied.length = 1; }
-    } else if (c.config.supplierLookupWhenNoPo && header.supplier_name) {
-      const r = await lookup('supplier_name', header.supplier_name);
-      en.lookup = { type: 'supplier_name', status: r.status, error: r.error };
-      if (r.status === 'matched') applied.push({ po: '', oracle: r.oracle });
-      else reasons.push(r.status === 'mismatch' ? `Supplier lookup returned a different vendor; nothing was substituted${label}` : `Supplier lookup returned no details for "${header.supplier_name}"${label}`);
+    } else {
+      en.lookup = { type: 'po_number', status: 'skipped', reason: 'No explicitly labelled PO number was found; the PO Details endpoint requires po_number.' };
+      t('tool', 'Oracle PO Details tool skipped: no verified PO number was found in the invoice.', 'warning');
     }
 
     // 4. authoritative supplier enrichment ------------------------------------------
@@ -245,6 +247,13 @@ export function validateInvoice(h: any, tol = 0.05, label = ''): Check[] {
   req('invoice_num', !!h.invoice_num, 'Required field missing: invoice number');
   req('invoice_date', !!h.invoice_date && /^\d{2}\/\d{2}\/\d{4}$/.test(h.invoice_date), 'Invoice date is missing or not in MM/DD/YYYY format');
   req('supplier_name', !!h.supplier_name, 'Required field missing: supplier name');
+  req('invoice_description', !!h.invoice_description, 'Required field missing: invoice description');
+  req('supplier_number', !!h.supplier_number, 'Required field missing: supplier number');
+  req('supplier_id', h.supplier_id !== null && h.supplier_id !== undefined, 'Required field missing: supplier ID');
+  req('supplier_site_id', h.supplier_site_id !== null && h.supplier_site_id !== undefined, 'Required field missing: supplier site ID');
+  req('supplier_site', !!h.supplier_site, 'Required field missing: supplier site');
+  req('payment_terms', !!h.payment_terms, 'Required field missing: payment terms');
+  req('invoice_currency', !!h.invoice_currency, 'Required field missing: invoice currency');
   req('invoice_amount', h.invoice_amount !== null && h.invoice_amount !== undefined, 'Required field missing: invoice amount');
   req('lines', (h.lines || []).length > 0, 'No invoice lines were extracted');
   const sum = (h.lines || []).reduce((s: number, l: any) => s + (num(l.amount) ?? 0), 0);

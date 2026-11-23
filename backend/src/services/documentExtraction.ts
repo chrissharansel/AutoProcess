@@ -1,12 +1,26 @@
 /**
  * Document extraction using GitHub Copilot CLI only.
- * Text-based PDFs are read from their embedded text layer (not OCR).
- * Scanned/image-only PDFs and image files are intentionally rejected because OCR is disabled.
+ * PDFs use embedded text plus OCR; scanned PDFs and invoice images are OCR'd.
  */
 import fs from 'fs/promises';
+import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { chatCompletion, type ChatMessage } from './llm';
 
+const execFileAsync = promisify(execFile);
+const getCopilotModel = () => (process.env.COPILOT_MODEL || 'auto').trim();
+
 const SYSTEM_RULES = `You are a strict accounts payable document extraction engine for buyer Petmate.
+MANDATORY HEADER FIELDS:
+Extract supplier_name, supplier_number, supplier_id, supplier_site_id, supplier_site,
+invoice_num, invoice_amount, invoice_date, invoice_description, payment_terms and invoice_currency.
+These fields are required outputs. If absent or unreadable, return null and list them in missing_required_fields. Never fabricate a value.
+Preserve supplier identifiers exactly as printed. Use the remit/remit-to site label for supplier_site when printed.
+Invoice amount must be the final invoice total/amount due, not subtotal. Invoice date must be copied exactly as printed.
+Invoice description should copy/summarize printed invoice item/service descriptions without adding facts.
+Currency must be supported by an explicit printed currency code or symbol.
+
 Use only the supplied document text. Copy values exactly. Never invent values.
 
 INVOICE NUMBER (invoice_number / invoice_num):
@@ -27,16 +41,42 @@ LINE ITEMS:
 Return only valid JSON.`;
 
 const JSON_SHAPE = `{
-  "invoice_number": null, "supplier_name": null, "supplier_address": null,
-  "bill_to": null, "ship_to": null, "customer_number": null, "po_number": null,
-  "invoice_date": null, "due_date": null, "ship_date": null, "ship_via": null,
-  "tracking_number": null, "subtotal": null, "freight": null, "tax_amount": null,
-  "invoice_amount": null, "currency": null,
-  "line_items": [{"line": null, "item_number": null, "description": null, "quantity": null, "unit_price": null, "amount": null}]
+  "invoices": [{
+    "header": {
+      "supplier_name": null,
+      "supplier_number": null,
+      "supplier_id": null,
+      "supplier_site_id": null,
+      "supplier_site": null,
+      "invoice_num": null,
+      "invoice_amount": null,
+      "invoice_date": null,
+      "invoice_description": null,
+      "payment_terms": null,
+      "invoice_currency": null,
+      "po_number": null,
+      "lines": [{
+        "po_number": null,
+        "invoice_line_number": null,
+        "po_line_number": null,
+        "line_type": null,
+        "item_number": null,
+        "line_description": null,
+        "quantity": null,
+        "unit_price": null,
+        "amount": null,
+        "unit_measure": null,
+        "requestor": null,
+        "default_distribution_account": null,
+        "code_combination_id": null
+      }]
+    }
+  }],
+  "missing_required_fields": []
 }`;
 
 export type ExtractMeta = {
-  method: 'text' | 'embedded' | 'plain' | 'none';
+  method: 'text' | 'embedded' | 'plain' | 'ocr' | 'mixed' | 'image_ocr' | 'none';
   model: string;
   textLength?: number;
   textPreview?: string;
@@ -126,24 +166,81 @@ function isReadableText(text: string): boolean {
   return useful / Math.max(sample.length, 1) >= 0.12;
 }
 
-async function extractPdfTextLayer(filePath: string): Promise<string> {
-  const mod: any = await import('pdf-parse');
-  const buffer = await fs.readFile(filePath);
-  if (typeof mod.PDFParse === 'function') {
-    const parser = new mod.PDFParse({ data: buffer });
-    try {
-      const result = await parser.getText();
-      return String(result?.text || '').trim();
-    } finally {
-      await parser.destroy?.();
+type TextAcquisition = {
+  text: string;
+  method: 'embedded' | 'ocr' | 'mixed' | 'image_ocr' | 'plain';
+  pages: number;
+};
+
+async function runOcrHelper(filePath: string, mimeType: string): Promise<TextAcquisition> {
+  const candidates = [
+    path.join(__dirname, 'ocr_document.py'),
+    path.resolve(process.cwd(), 'src', 'services', 'ocr_document.py'),
+    path.resolve(process.cwd(), 'backend', 'src', 'services', 'ocr_document.py'),
+  ];
+  let scriptPath = '';
+  for (const candidate of candidates) {
+    try { await fs.access(candidate); scriptPath = candidate; break; } catch { /* try next */ }
+  }
+  if (!scriptPath) throw new Error('OCR helper ocr_document.py was not found in backend/src/services.');
+
+  const python = process.env.PYTHON_BIN || process.env.PYTHON || 'python';
+  let stdout = '';
+  try {
+    const result = await execFileAsync(python, [scriptPath, filePath, mimeType], {
+      cwd: path.dirname(scriptPath),
+      timeout: Number(process.env.OCR_TIMEOUT_MS || 180000),
+      maxBuffer: 20 * 1024 * 1024,
+      windowsHide: true,
+      env: { ...process.env },
+    });
+    stdout = result.stdout || '';
+  } catch (error: any) {
+    const output = String(error?.stdout || '').trim();
+    if (output) {
+      try {
+        const parsed = JSON.parse(output);
+        if (parsed?.error) throw new Error(String(parsed.error));
+      } catch (parseError: any) {
+        if (parseError?.message && parseError.message !== 'Unexpected end of JSON input' && parseError.message !== output) {
+          throw parseError;
+        }
+      }
     }
+    const stderr = String(error?.stderr || '').trim();
+    throw new Error(`OCR processing failed. Verify Python, PyMuPDF, Pillow, pytesseract and Tesseract. ${stderr || error?.message || ''}`.trim());
   }
-  const fn = mod.default || mod;
-  if (typeof fn === 'function') {
-    const result = await fn(buffer);
-    return String(result?.text || '').trim();
+
+  let parsed: any;
+  const output = String(stdout || '').trim();
+  try {
+    // Python/PyMuPDF versions may emit a warning before the JSON payload.
+    // Locate the JSON object rather than assuming stdout contains only JSON.
+    const firstBrace = output.indexOf('{');
+    const lastBrace = output.lastIndexOf('}');
+    if (firstBrace < 0 || lastBrace <= firstBrace) {
+      throw new Error('No JSON object found in OCR helper output.');
+    }
+    parsed = JSON.parse(output.slice(firstBrace, lastBrace + 1));
+  } catch {
+    throw new Error(`OCR helper returned invalid JSON: ${output.slice(0, 500)}`);
   }
-  throw new Error('Unsupported pdf-parse API. Run npm install in backend.');
+  if (parsed?.error) throw new Error(String(parsed.error));
+
+  const text = String(parsed?.text || '').trim();
+  if (!isReadableText(text)) {
+    const details = [
+      parsed?.error,
+      parsed?.diagnostics?.length ? `OCR diagnostics: ${parsed.diagnostics.join(' | ')}` : '',
+      parsed?.tesseract_version ? `Tesseract: ${parsed.tesseract_version}` : '',
+      parsed?.language ? `Language: ${parsed.language}` : '',
+      parsed?.tesseract_languages ? `Installed languages: ${parsed.tesseract_languages.join(', ')}` : '',
+      `Characters: ${Number(parsed?.chars) || 0}`,
+    ].filter(Boolean).join(' ; ');
+    throw new Error(`OCR completed but returned no readable text. ${details || 'Check the PDF scan quality, Tesseract executable path and language data.'}`);
+  }
+  const method = ['embedded', 'ocr', 'mixed', 'image_ocr', 'plain'].includes(parsed.method) ? parsed.method : 'ocr';
+  return { text, method, pages: Math.max(1, Number(parsed.pages) || 1) };
 }
 
 async function runCopilotJson(system: string, user: string): Promise<any> {
@@ -152,7 +249,7 @@ async function runCopilotJson(system: string, user: string): Promise<any> {
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    model: process.env.COPILOT_MODEL || undefined,
+    model: getCopilotModel(),
     temperature: 0,
     response_format: { type: 'json_object' },
   });
@@ -167,11 +264,11 @@ export async function extractFromText(
   text: string,
   prompt: string,
   outputSchema?: Record<string, any>,
-  method: 'text' | 'embedded' | 'plain' = 'text'
+  method: 'text' | 'embedded' | 'plain' | 'ocr' | 'mixed' | 'image_ocr' = 'text'
 ): Promise<{ result: any; confidence?: number; rawText?: string }> {
   if (!isReadableText(text)) {
     throw new Error(
-      'No readable embedded text was found. OCR is disabled. Please upload a text-based PDF or a TXT/CSV/JSON file.'
+      'No readable text was obtained from the document. OCR was attempted; check the scan quality and upload a clearer PDF/image or TXT/CSV/JSON file.'
     );
   }
   const schemaText = outputSchema
@@ -179,7 +276,7 @@ export async function extractFromText(
     : `Use this JSON structure, filling fields only when supported:\n${JSON_SHAPE}`;
   const user = `TASK:\n${prompt || 'Extract all invoice fields.'}\n\n${schemaText}\n\nDOCUMENT TEXT:\n<<<\n${text.slice(0, 45000)}\n>>>`;
   const result = normalizeInvoiceFields(await runCopilotJson(SYSTEM_RULES, user), text);
-  const model = process.env.COPILOT_MODEL || 'GitHub Copilot CLI default';
+  const model = getCopilotModel();
   return {
     ...wrap(result, { method, model, textLength: text.length, textPreview: text.slice(0, 500) }, 0.9),
     rawText: text,
@@ -192,28 +289,8 @@ export async function extractFromDocument(
   prompt: string,
   outputSchema?: Record<string, any>
 ): Promise<{ result: any; confidence?: number; rawText?: string }> {
-  const lower = filePath.toLowerCase();
-  if (mimeType === 'application/pdf' || lower.endsWith('.pdf')) {
-    const text = await extractPdfTextLayer(filePath);
-    console.log(`[extract] embedded PDF text chars=${text.length}`);
-    if (!isReadableText(text)) {
-      throw new Error(
-        'This PDF has no usable embedded text. OCR is disabled in this AutoProcess configuration. Upload a text-based PDF instead.'
-      );
-    }
-    return extractFromText(text, prompt, outputSchema, 'embedded');
-  }
-  if (mimeType.startsWith('text/') || /\.(txt|csv|json)$/i.test(lower)) {
-    return extractFromText(await fs.readFile(filePath, 'utf8'), prompt, outputSchema, 'plain');
-  }
-  if (mimeType.startsWith('image/')) {
-    throw new Error(
-      'Image extraction is disabled because OCR is disabled. Upload a text-based PDF or TXT/CSV/JSON file.'
-    );
-  }
-  throw new Error(
-    `Unsupported file type: ${mimeType}. Supported without OCR: text-based PDF, TXT, CSV and JSON.`
-  );
+  const acquired = await extractDocumentText(filePath, mimeType);
+  return extractFromText(acquired.text, prompt, outputSchema, acquired.method);
 }
 
 export async function answerDocumentQuestion(
@@ -238,7 +315,7 @@ export async function answerDocumentQuestion(
   ];
   const r = await chatCompletion({
     messages,
-    model: process.env.COPILOT_MODEL || undefined,
+    model: getCopilotModel(),
     temperature: 0.2,
     response_format: { type: 'text' },
   });
@@ -247,30 +324,32 @@ export async function answerDocumentQuestion(
   return answer;
 }
 
-/** Text acquisition for agent workflows. No OCR fallback exists. */
+/**
+ * Text acquisition for agent workflows.
+ * PDFs use embedded text plus OCR across pages; images are OCR'd directly.
+ */
 export async function extractDocumentText(
   filePath: string,
   mimeType: string,
   opts: { onProgress?: (m: string) => void } = {}
-): Promise<{ text: string; method: 'embedded' | 'plain'; pages: number }> {
+): Promise<TextAcquisition> {
   const lower = filePath.toLowerCase();
-  if (mimeType === 'application/pdf' || lower.endsWith('.pdf')) {
-    opts.onProgress?.('Reading embedded PDF text (OCR disabled)');
-    const text = await extractPdfTextLayer(filePath);
-    if (!isReadableText(text)) {
-      throw new Error('This PDF has no usable embedded text. OCR is disabled. Upload a text-based PDF.');
-    }
-    return {
-      text,
-      method: 'embedded',
-      pages: Math.max(1, (text.match(/\f/g) || []).length + 1),
-    };
-  }
   if (mimeType.startsWith('text/') || /\.(txt|csv|json)$/i.test(lower)) {
-    return { text: await fs.readFile(filePath, 'utf8'), method: 'plain', pages: 1 };
+    const text = await fs.readFile(filePath, 'utf8');
+    if (!isReadableText(text)) throw new Error('The uploaded text file is empty or contains no readable text.');
+    return { text, method: 'plain', pages: 1 };
   }
-  if (mimeType.startsWith('image/')) {
-    throw new Error('Image extraction is unavailable because OCR is disabled.');
+
+  const isPdf = mimeType === 'application/pdf' || lower.endsWith('.pdf');
+  const isImage = mimeType.startsWith('image/') || /\.(png|jpe?g|tiff?|bmp|webp)$/i.test(lower);
+  if (!isPdf && !isImage) {
+    throw new Error(`Unsupported document type ${mimeType}. Supported: PDF, PNG, JPG, TIFF, BMP, WEBP, TXT, CSV and JSON.`);
   }
-  throw new Error(`Unsupported document type ${mimeType}. Supported: text-based PDF, TXT, CSV and JSON.`);
+
+  opts.onProgress?.(isPdf
+    ? 'Reading PDF text layer and running OCR across every page'
+    : 'Running OCR on uploaded invoice image');
+  const acquired = await runOcrHelper(filePath, mimeType);
+  opts.onProgress?.(`Text acquired using ${acquired.method}: ${acquired.text.length} characters across ${acquired.pages} page(s)`);
+  return acquired;
 }

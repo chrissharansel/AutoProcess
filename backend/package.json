@@ -1,7 +1,7 @@
 {
   "name": "autoprocess-backend",
   "version": "1.0.0",
-  "description": "AutoProcess - Agentic document automation using GitHub Copilot CLI + embedded PDF text extraction + MongoDB",
+  "description": "AutoProcess - Agentic AP document automation using GitHub Copilot CLI, PDF text extraction, Tesseract OCR fallback and MongoDB",
   "main": "dist/index.js",
   "scripts": {
     "dev": "nodemon --exec ts-node src/index.ts",

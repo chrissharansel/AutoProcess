@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import api, { errMsg } from '../lib/api';
 import { Empty, ErrorBox, Modal, Pagination, Spinner, StatusTag, fmtDate, useConfirm, useDebounced, usePoll, useToast } from '../lib/ui';
 
-const ACCEPT = '.pdf,.txt,.csv,.json,application/pdf,text/plain,text/csv,application/json';
+const ACCEPT = '.pdf,.png,.jpg,.jpeg,.txt,.csv,.json,application/pdf,image/png,image/jpeg,text/plain,text/csv,application/json';
 const size = (b: number) => (b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
 interface QItem { docId: string; name: string; executionId?: string; status: string; step?: string; error?: string }
 
@@ -40,8 +40,8 @@ export default function Documents() {
 
   const addFiles = (list: FileList | File[]) => {
     const ok: File[] = []; const bad: string[] = [];
-    Array.from(list).forEach((f) => (/\.(pdf|txt|csv|json)$/i.test(f.name) ? ok.push(f) : bad.push(f.name)));
-    if (bad.length) toast.error(`Unsupported file type: ${bad.join(', ')}. Use PDF, TXT, CSV or JSON.`);
+    Array.from(list).forEach((f) => (/\.(pdf|png|jpe?g|txt|csv|json)$/i.test(f.name) ? ok.push(f) : bad.push(f.name)));
+    if (bad.length) toast.error(`Unsupported file type: ${bad.join(', ')}. Use PDF, PNG, JPG, TXT, CSV or JSON.`);
     setFiles((cur) => [...cur, ...ok].slice(0, 20));
   };
 
@@ -76,7 +76,7 @@ export default function Documents() {
 
   return (
     <div className="page">
-      <div className="page-header"><div><h1>Documents</h1><p className="subtitle">Upload text-based PDFs or TXT/CSV/JSON files, pick an agent and process them. Only embedded text is read; OCR and image extraction are disabled.</p></div></div>
+      <div className="page-header"><div><h1>Documents</h1><p className="subtitle">Upload PDF, PNG, JPG or TXT/CSV/JSON files. Embedded PDF text is preferred; scanned PDFs and images are processed with Tesseract OCR.</p></div></div>
 
       <div className="panel" style={{ marginBottom: 18 }}>
         <div className="split-even" style={{ gridTemplateColumns: 'minmax(0,1.3fr) minmax(0,1fr)' }}>
@@ -87,7 +87,7 @@ export default function Documents() {
               <input ref={input} type="file" multiple accept={ACCEPT} hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ''; }} />
               <div className="drop-icon">⇪</div>
               <p>{files.length ? `${files.length} file${files.length > 1 ? 's' : ''} ready` : 'Drop documents here or click to browse'}</p>
-              <p className="muted">Text-based PDF, TXT, CSV or JSON · up to 20 files</p>
+              <p className="muted">PDF (including scanned), PNG, JPG, TXT, CSV or JSON · up to 20 files</p>
             </div>
             {files.length > 0 && <ul style={{ listStyle: 'none', marginTop: 10 }}>{files.map((f, i) => <li key={i} className="spread" style={{ padding: '4px 0' }}><span style={{ overflowWrap: 'anywhere' }}>{f.name} <span className="muted">· {size(f.size)}</span></span><button className="btn sm ghost" onClick={() => setFiles((c) => c.filter((_, j) => j !== i))} aria-label={`Remove ${f.name}`}>✕</button></li>)}</ul>}
           </div>

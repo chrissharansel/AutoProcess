@@ -237,7 +237,7 @@ export default function Extract() {
       <header className="page-header">
         <div>
           <h1>Document Extraction</h1>
-          <p className="subtitle">Upload a text-based PDF or text file. GitHub Copilot extracts structured data; OCR is disabled</p>
+          <p className="subtitle">Upload an invoice PDF or image. Embedded PDF text is preferred; Tesseract OCR reads scanned PDFs and images, then GitHub Copilot extracts structured data.</p>
         </div>
       </header>
 
@@ -253,7 +253,7 @@ export default function Extract() {
             <input
               ref={fileRef}
               type="file"
-              accept=".pdf,.txt,.csv,.json"
+              accept=".pdf,.png,.jpg,.jpeg,.txt,.csv,.json"
               hidden
               onChange={(e) => setFile(e.target.files?.[0] || null)}
             />
@@ -272,7 +272,7 @@ export default function Extract() {
               <>
                 <div className="drop-icon">↑</div>
                 <p>Drag & drop a document here</p>
-                <p className="muted">or click to browse (text-based PDF, TXT, CSV, JSON)</p>
+                <p className="muted">or click to browse (PDF, PNG, JPG, TXT, CSV, JSON)</p>
               </>
             )}
           </div>

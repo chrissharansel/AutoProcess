@@ -51,9 +51,9 @@ A PO number is the BUYER's purchase order number. Accept a value as a PO number 
 7. The context may include "po_candidates": values a rule engine found next to PO labels, with their label and the source line. Use a candidate only if you agree it is the buyer's PO under these rules; ignore it otherwise. Never use a value that is not in the document text.
 
 ### TOOLS
-- get_po_details looks up Oracle EBS. When you identified a PO number, call get_po_details with the parameter po_number (digits and letters exactly as printed). When there is no PO number, call it with supplier_name. Call it at most once per distinct PO number.
-- The tool result is authoritative for supplier name, supplier number, supplier id, supplier site, supplier site id, currency, payment terms and for the PO lines. If the tool returns an error or no record, keep the extracted values, say nothing else about it, and never invent a tool result.
-- Do not call a tool when there is nothing to look up. Never claim you called a tool that you did not call.
+- get_po_details calls the Oracle PO Details REST API. When you identify an explicitly labelled PO number, call get_po_details with po_number exactly as printed. The API endpoint accepts po_number; do not call it with supplier_name. Call it once per distinct PO number.
+- The tool result is authoritative for supplier name, supplier number, supplier ID, supplier site ID, supplier site, currency, payment terms, requestor and PO lines. Use its lines to enrich PO line number, item number, UOM, code combination ID and default distribution account after matching invoice lines.
+- If there is no explicit PO number, do not call this PO endpoint. Supplier master fields that cannot be obtained elsewhere must remain missing and require manual review. If the tool returns an error or no record, preserve extracted invoice values and never invent Oracle values. Never claim a tool was called unless it actually was.
 
 ### EXAMPLE 1 — PO invoice (table layout)
 Text: "ACME RENTALS LLC ... Invoice No. 14591 ... Customer ID | PO# | Rental # | Pay Online ID | Clerk | Terms ... C173 | 380807 | 55 | W9 | JD | NET 30 ... Equipment rental 1 250.00 250.00 ... Sales tax 17.50 ... Total Due 267.50"
@@ -95,20 +95,20 @@ export const AP_OUTPUT_SCHEMA = {
 
 export const AP_TOOL = {
   name: 'Oracle PO Details', functionName: 'get_po_details',
-  description: 'Look up an Oracle EBS purchase order by po_number (use when the invoice shows an explicit PO number) or supplier master details by supplier_name (only when the invoice has no PO). Returns supplier number/id/site, currency, payment terms and all PO lines with item, quantity, price, UOM, code combination id and distribution account.',
-  method: 'GET', endpoint: 'https://ispdev.petmate.com:8500/apex/rest/get/podetails/',
+  description: 'Fetch authoritative Oracle EBS purchase order details using the explicit PO number printed on the invoice. Call this tool after extracting a labelled PO number. Returns supplier name, supplier number, supplier ID, supplier site ID, supplier site, currency, payment terms, requestor, PO header data and PO lines including line number, item description, quantity, unit price, UOM, code combination ID and default distribution account. Do not call without a verified PO number.',
+  method: 'GET', endpoint: process.env.ORACLE_PO_DETAILS_URL || 'https://ispdev.petmate.com:8500/apex/rest/get/podetails/',
   authType: 'basic', auth: { usernameRef: 'ENV:ORACLE_PO_API_USERNAME', passwordRef: 'ENV:ORACLE_PO_API_PASSWORD' },
   headers: {}, queryParams: {},
-  parameters: { type: 'object', properties: { po_number: { type: 'string', description: 'Purchase order number' }, supplier_name: { type: 'string', description: 'Supplier name' } }, required: [] },
+  parameters: { type: 'object', properties: { po_number: { type: 'string', minLength: 1, description: 'Explicit purchase order number printed on the invoice. Sent as ?po_number=...' } }, required: ['po_number'], additionalProperties: false },
   responseDescription: 'po_number, supplier, supplier_number, supplier_id, supplier_site_id, supplier_site, currency, terms, requestor, and lines[] with line_num, item_number, item_description, item_qty, unit_price, line_amount, uom, code_combination_id, default_distribution_account.',
   timeoutMs: 20000, retryCount: 1, requiresApproval: false, enabled: true,
 };
 
-export const AP_POST_PROCESS = { type: 'ap_invoice', poTool: 'get_po_details', supplierLookupWhenNoPo: true, amountTolerance: 0.05 };
+export const AP_POST_PROCESS = { type: 'ap_invoice', poTool: 'get_po_details', supplierLookupWhenNoPo: false, amountTolerance: 0.05 };
 
 export const AP_WORKFLOW = {
   name: 'AP invoice with Oracle enrichment',
-  description: 'Embedded PDF text → GitHub Copilot extraction → conditional Oracle lookup and PO-line matching → validation → human review when needed.',
+  description: 'PDF text/OCR → GitHub Copilot extraction → automatic get_po_details REST tool call using the verified PO number → Oracle supplier enrichment and PO-line matching → mandatory-field validation → human review when needed.',
   definition: { steps: [
     { id: 'upload', type: 'document_upload', name: 'Document upload' },
     { id: 'text', type: 'text_extraction', name: 'Embedded PDF text extraction' },
@@ -123,6 +123,6 @@ export const AP_WORKFLOW = {
 
 export const AP_AGENT_TEMPLATE = {
   name: 'AP Invoice Agent', description: 'Extracts AP invoices and enriches them from the Oracle PO Details API.',
-  systemPrompt: AP_SYSTEM_PROMPT, model: 'GitHub Copilot CLI default', temperature: 0.1, maxIterations: 6,
+  systemPrompt: AP_SYSTEM_PROMPT, model: 'auto', temperature: 0.1, maxIterations: 6,
   outputSchema: AP_OUTPUT_SCHEMA, postProcess: AP_POST_PROCESS,
 };

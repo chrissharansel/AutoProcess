@@ -16,7 +16,7 @@ export const DEFAULT_DOC_TASK = 'Process the document text provided in the task 
 
 export function defaultSteps(agent: any, hasDocument: boolean): StepDef[] {
   const s: StepDef[] = [];
-  if (hasDocument) s.push({ id: 'upload', type: 'document_upload', name: 'Document upload' }, { id: 'text', type: 'text_extraction', name: 'Embedded PDF text extraction' });
+  if (hasDocument) s.push({ id: 'upload', type: 'document_upload', name: 'Document upload' }, { id: 'text', type: 'text_extraction', name: 'PDF text extraction + OCR' });
   s.push({ id: 'agent', type: 'llm_extraction', name: 'Agent execution' });
   if (agent.postProcess?.type === 'ap_invoice') s.push({ id: 'enrich', type: 'enrich_ap_invoice', name: 'Oracle enrichment and PO-line matching' });
   s.push({ id: 'validate', type: 'validation', name: 'Output validation' },
@@ -99,11 +99,24 @@ export async function runPipeline(p: {
       emit('document', `Document uploaded: ${ctx.document.name}`, 'success', { mimeType: ctx.document.mimeType, bytes: ctx.document.size });
     },
     text_extraction: async (step) => { await acquireText(step); },
-    ocr: async () => { throw new Error('OCR workflow steps are disabled. Use embedded PDF text extraction.'); },
+    ocr: async (step) => { await acquireText(step); },
     llm_extraction: async (step) => {
       const agentCfg = cfg;
       const vars = { invoice_text: ctx.text, extracted_invoice: ctx.output, supplier_name: ctx.vars.supplier_name, po_number: ctx.vars.po_number, document_name: ctx.document?.name, oracle_po_response: ctx.enrichment?.invoices?.[0]?.poResponse };
-      const prompt = renderPrompt(agentCfg.effectivePrompt, vars);
+      const basePrompt = renderPrompt(agentCfg.effectivePrompt, vars);
+      const apInvoiceInstructions = p.agent.postProcess?.type === 'ap_invoice'
+        ? `
+
+MANDATORY PETMATE AP INVOICE EXTRACTION REQUIREMENTS:
+Return one JSON object in this exact top-level shape: {"invoices":[{"header":{...}}]}.
+Extract these header fields whenever present: supplier_name, supplier_number, supplier_id, supplier_site_id, supplier_site, invoice_num, invoice_amount, invoice_date, invoice_description, payment_terms, invoice_currency.
+Required header fields: supplier_name, supplier_number, supplier_id, supplier_site_id, supplier_site, invoice_num, invoice_amount, invoice_date, payment_terms, invoice_currency. If absent or unreadable, use null or an empty string; NEVER invent values. Preserve printed values exactly. Use supplier site label such as REMIT when shown.
+For every invoice line, return: po_number, invoice_line_number, po_line_number, line_type, item_number, line_description, quantity, unit_price, amount, unit_measure, requestor, default_distribution_account, code_combination_id.
+Do not omit readable invoice lines. Do not invent PO numbers, PO line numbers, requestors, distribution accounts, or code combinations. Use null/empty string when not printed or supplied by Oracle enrichment.
+Invoice amount is the final invoice total, not subtotal. Invoice date is the printed invoice date. Currency must be explicitly supported by the document.
+`
+        : '';
+      const prompt = `${basePrompt}${apInvoiceInstructions}`;
       const context: any = { ...(ctx.input.context || {}) };
       if (ctx.document) context.document = { name: ctx.document.name, mimeType: ctx.document.mimeType };
       // Always include document text in context for AP agents (belt-and-suspenders with {{invoice_text}}).
@@ -186,6 +199,33 @@ export async function runPipeline(p: {
     validation: async () => {
       const v = validateAgainstSchema(cfg.outputSchema, ctx.output);
       ctx.validation.valid = v.valid; ctx.validation.schemaErrors = v.errors;
+      if (p.agent.postProcess?.type === 'ap_invoice') {
+        for (const inv of (ctx.output?.invoices || [])) {
+          const h = inv?.header || {};
+          const requiredHeader: Array<[string, string]> = [
+            ['supplier_name', 'Supplier Name'], ['supplier_number', 'Supplier Number'],
+            ['supplier_id', 'Supplier ID'], ['supplier_site_id', 'Supplier Site ID'],
+            ['supplier_site', 'Supplier Site'], ['invoice_num', 'Invoice Number'],
+            ['invoice_amount', 'Invoice Amount'], ['invoice_date', 'Invoice Date'],
+            ['invoice_description', 'Invoice Description'], ['payment_terms', 'Payment Terms'], ['invoice_currency', 'Invoice Currency'],
+          ];
+          const missing = requiredHeader
+            .filter(([key]) => h[key] === null || h[key] === undefined || String(h[key]).trim() === '')
+            .map(([, label]) => label);
+          if (missing.length) {
+            const message = `Required invoice fields need review: ${missing.join(', ')}`;
+            ctx.reviewReasons.push(message);
+            ctx.warnings.push(message);
+            emit('validation', message, 'warning');
+          }
+          if (!Array.isArray(h.lines) || h.lines.length === 0) {
+            const message = 'No invoice lines were extracted; verify the invoice line table manually.';
+            ctx.reviewReasons.push(message);
+            ctx.warnings.push(message);
+            emit('validation', message, 'warning');
+          }
+        }
+      }
       if (!isEmptySchema(cfg.outputSchema)) {
         emit('validation', v.valid ? 'Final JSON validated against the configured schema' : 'Final JSON failed schema validation', v.valid ? 'success' : 'error', v.valid ? undefined : { errors: v.errors.slice(0, 10) });
         if (!v.valid) ctx.reviewReasons.push('JSON schema validation failed');
@@ -203,14 +243,18 @@ export async function runPipeline(p: {
   async function acquireText(step: StepDef) {
     if (!p.document) throw new Error('No document is attached to this execution.');
     const doc: any = p.document;
-    if (doc.ocrText) {
-      ctx.text = doc.ocrText; ctx.textMeta = doc.ocrMeta; emit('text', 'Using previously extracted text', 'success', { method: doc.ocrMeta?.method, characters: ctx.text.length }); return;
+    if (doc.ocrText && doc.ocrMeta?.extractorVersion === 2) {
+      ctx.text = doc.ocrText;
+      ctx.textMeta = doc.ocrMeta;
+      emit('text', 'Using cached text from OCR-enabled extractor', 'success', { method: doc.ocrMeta?.method, characters: ctx.text.length });
+      return;
     }
-    emit('text', 'Embedded text extraction started (OCR disabled)', 'info');
+    emit('text', 'PDF text extraction and OCR started', 'info');
     const r = await extractDocumentText(doc.path, doc.mimeType, { onProgress: (m) => emit('text', m, 'info') });
-    ctx.text = r.text; ctx.textMeta = { method: r.method, pages: r.pages, characters: r.text.length };
+    ctx.text = r.text;
+    ctx.textMeta = { method: r.method, pages: r.pages, characters: r.text.length, extractorVersion: 2 };
     await DocumentModel.updateOne({ _id: doc._id }, { $set: { ocrText: r.text, ocrMeta: ctx.textMeta, status: 'processed' } });
-    emit('text', 'Embedded text extraction completed', 'success', ctx.textMeta);
+    emit('text', 'Text extraction/OCR completed', 'success', ctx.textMeta);
   }
 
   let failure: string | null = null;

@@ -151,13 +151,38 @@ system.get('/templates', (_req, res) => res.json({ agent: AP_AGENT_TEMPLATE, too
 system.post('/templates/ap/install', adminOnly, wrap(async (req: AuthRequest, res: Response) => {
   const base = { workspaceId: req.workspaceId, userId: req.userId };
   let tool: any = await AgentTool.findOne({ workspaceId: req.workspaceId, functionName: AP_TOOL.functionName });
-  if (!tool) tool = await AgentTool.create({ ...AP_TOOL, ...base });
+  if (!tool) {
+    tool = await AgentTool.create({ ...AP_TOOL, ...base });
+  } else {
+    // Repair older workspace copies so the endpoint and schema match the PO-number API contract.
+    tool.set({ ...AP_TOOL, workspaceId: req.workspaceId, userId: tool.userId || req.userId });
+    await tool.save();
+  }
   let schema: any = await OutputSchema.findOne({ workspaceId: req.workspaceId, name: 'AP Invoice API Output' });
   if (!schema) schema = await OutputSchema.create({ name: 'AP Invoice API Output', description: 'invoices → header → lines contract', schema: AP_OUTPUT_SCHEMA, versions: [{ version: 1, schema: AP_OUTPUT_SCHEMA, note: 'Installed from template', userId: req.userId }], ...base });
+  else { schema.schema = AP_OUTPUT_SCHEMA; await schema.save(); }
   let wf: any = await Workflow.findOne({ workspaceId: req.workspaceId, name: AP_WORKFLOW.name });
   if (!wf) wf = await Workflow.create({ ...AP_WORKFLOW, ...base });
+  else { wf.definition = AP_WORKFLOW.definition; wf.description = AP_WORKFLOW.description; await wf.save(); }
   let agent: any = await Agent.findOne({ workspaceId: req.workspaceId, name: AP_AGENT_TEMPLATE.name });
-  if (!agent) agent = await Agent.create({ ...AP_AGENT_TEMPLATE, toolIds: [tool._id], outputSchemaId: schema._id, workflowId: wf._id, isActive: true, ...base });
+  // Reuse a previously created custom AP agent (for example, 'Petmate AP Invoice Agent')
+  // instead of creating a disconnected duplicate that the user is not running.
+  if (!agent) agent = await Agent.findOne({ workspaceId: req.workspaceId, $or: [{ 'postProcess.type': 'ap_invoice' }, { name: /AP Invoice Agent/i }] });
+  if (!agent) {
+    agent = await Agent.create({ ...AP_AGENT_TEMPLATE, toolIds: [tool._id], outputSchemaId: schema._id, workflowId: wf._id, postProcess: AP_AGENT_TEMPLATE.postProcess, isActive: true, ...base });
+  } else {
+    const attached = (agent.toolIds || []).map((id: any) => String(id));
+    if (!attached.includes(String(tool._id))) attached.push(String(tool._id));
+    agent.toolIds = attached;
+    agent.outputSchemaId = schema._id;
+    agent.workflowId = wf._id;
+    agent.postProcess = AP_AGENT_TEMPLATE.postProcess;
+    if (!agent.systemPrompt || !/get_po_details/i.test(agent.systemPrompt)) agent.systemPrompt = AP_AGENT_TEMPLATE.systemPrompt;
+    if (!agent.outputSchema || !Object.keys(agent.outputSchema).length) agent.outputSchema = AP_AGENT_TEMPLATE.outputSchema;
+    if (/ollama|llama3/i.test(String(agent.model || ''))) agent.model = 'auto';
+    agent.isActive = true;
+    await agent.save();
+  }
   await audit({ workspaceId: req.workspaceId!, userId: req.userId, userEmail: req.userEmail, action: 'template.install', entityType: 'agent', entityId: String(agent._id), meta: { template: 'ap_invoice' } });
   res.status(201).json({ agentId: String(agent._id), toolId: String(tool._id), schemaId: String(schema._id), workflowId: String(wf._id) });
 }));

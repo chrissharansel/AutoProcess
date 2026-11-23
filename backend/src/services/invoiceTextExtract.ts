@@ -206,9 +206,41 @@ function emptyHeader(): any {
 export function coerceApShape(raw: any): any {
   if (!raw || typeof raw !== 'object') return { invoices: [{ header: emptyHeader() }] };
 
-  // Already correct
+  // Standard AP shape: normalize aliases and guarantee every UI field exists.
   if (Array.isArray(raw.invoices) && raw.invoices[0]?.header) {
-    return raw;
+    return {
+      ...raw,
+      invoices: raw.invoices.map((inv: any) => {
+        const ih = inv.header || {};
+        const sourceLines = Array.isArray(ih.lines) ? ih.lines : Array.isArray(ih.line_items) ? ih.line_items : [];
+        return {
+          ...inv,
+          header: {
+            ...emptyHeader(),
+            ...ih,
+            invoice_num: String(ih.invoice_num ?? ih.invoice_number ?? ''),
+            invoice_amount: ih.invoice_amount ?? ih.total ?? null,
+            invoice_currency: String(ih.invoice_currency ?? ih.currency ?? ''),
+            payment_terms: String(ih.payment_terms ?? ih.terms ?? ''),
+            lines: sourceLines.map((li: any, i: number) => ({
+              po_number: String(li.po_number ?? ih.po_number ?? ''),
+              po_line_number: String(li.po_line_number ?? ''),
+              invoice_line_number: li.invoice_line_number ?? li.line ?? i + 1,
+              line_type: li.line_type || classifyLineType(String(li.line_description || li.description || '')),
+              item_number: String(li.item_number ?? ''),
+              line_description: String(li.line_description ?? li.description ?? '').slice(0, 240),
+              quantity: li.quantity ?? null,
+              unit_price: li.unit_price ?? null,
+              amount: li.amount ?? li.line_amount ?? null,
+              unit_measure: String(li.unit_measure ?? li.unit_of_measure ?? ''),
+              requestor: String(li.requestor ?? ''),
+              code_combination_id: String(li.code_combination_id ?? ''),
+              default_distribution_account: String(li.default_distribution_account ?? ''),
+            })),
+          },
+        };
+      }),
+    };
   }
   // { invoices: [ headerWithoutNested ] }
   if (Array.isArray(raw.invoices) && raw.invoices[0] && !raw.invoices[0].header) {
@@ -232,6 +264,11 @@ export function coerceApShape(raw: any): any {
     const h = emptyHeader();
     h.invoice_num = String(raw.invoice_num ?? raw.invoice_number ?? '');
     h.supplier_name = String(raw.supplier_name ?? '');
+    h.supplier_number = String(raw.supplier_number ?? '');
+    h.supplier_id = raw.supplier_id ?? null;
+    h.supplier_site_id = raw.supplier_site_id ?? null;
+    h.supplier_site = String(raw.supplier_site ?? '');
+    h.invoice_description = String(raw.invoice_description ?? '');
     h.invoice_date = raw.invoice_date ?? null;
     h.invoice_amount = raw.invoice_amount ?? raw.total ?? null;
     h.payment_terms = String(raw.payment_terms ?? raw.terms ?? '');
@@ -239,18 +276,18 @@ export function coerceApShape(raw: any): any {
     const items = raw.lines || raw.line_items || [];
     h.lines = (Array.isArray(items) ? items : []).map((li: any, i: number) => ({
       po_number: String(li.po_number ?? raw.po_number ?? ''),
-      po_line_number: '',
-      invoice_line_number: i + 1,
+      po_line_number: String(li.po_line_number ?? ''),
+      invoice_line_number: li.invoice_line_number ?? li.line ?? i + 1,
       line_type: li.line_type || classifyLineType(String(li.line_description || li.description || '')),
       item_number: String(li.item_number ?? ''),
       line_description: String(li.line_description ?? li.description ?? '').slice(0, 240),
       quantity: li.quantity ?? null,
       unit_price: li.unit_price ?? null,
-      amount: li.amount ?? null,
-      unit_measure: '',
-      requestor: '',
-      code_combination_id: '',
-      default_distribution_account: '',
+      amount: li.amount ?? li.line_amount ?? null,
+      unit_measure: String(li.unit_measure ?? li.unit_of_measure ?? ''),
+      requestor: String(li.requestor ?? ''),
+      code_combination_id: String(li.code_combination_id ?? ''),
+      default_distribution_account: String(li.default_distribution_account ?? ''),
     }));
     return { invoices: [{ header: h }] };
   }
@@ -315,6 +352,42 @@ export function recoverHeaderFromText(header: any, text: string): { header: any;
       h.invoice_amount = a;
       notes.push(`invoice_amount recovered: ${a}`);
     }
+  }
+
+  // Recover supplier master identifiers from explicitly labelled OCR/PDF text.
+  const labelledValue = (labels: string[]): string => {
+    for (const label of labels) {
+      const re = new RegExp(`(?:^|\\n)\\s*${label}\\s*[:#]?\\s*([A-Z0-9][A-Z0-9._/-]{1,40})`, 'i');
+      const m = text.match(re);
+      if (m?.[1]) return m[1].trim();
+    }
+    return '';
+  };
+  if (blank(h.supplier_number)) {
+    const v = labelledValue(['supplier\\s+number', 'vendor\\s+number', 'vendor\\s+#', 'supplier\\s+#']);
+    if (v) { h.supplier_number = v; notes.push(`supplier_number recovered: ${v}`); }
+  }
+  if (blank(h.supplier_id)) {
+    const v = labelledValue(['supplier\\s+id', 'vendor\\s+id']);
+    if (v) { h.supplier_id = v; notes.push(`supplier_id recovered: ${v}`); }
+  }
+  if (blank(h.supplier_site_id)) {
+    const v = labelledValue(['supplier\\s+site\\s+id', 'vendor\\s+site\\s+id']);
+    if (v) { h.supplier_site_id = v; notes.push(`supplier_site_id recovered: ${v}`); }
+  }
+  if (blank(h.supplier_site)) {
+    const v = labelledValue(['supplier\\s+site', 'vendor\\s+site']);
+    if (v) { h.supplier_site = v; notes.push(`supplier_site recovered: ${v}`); }
+    else if (/\\bREMIT\\b/i.test(text)) { h.supplier_site = 'REMIT'; notes.push('supplier_site recovered from REMIT label'); }
+  }
+  if (blank(h.invoice_description)) {
+    const m = text.match(/(?:invoice\\s+description|description)\\s*[:#]?\\s*([^\\r\\n]{8,240})/i);
+    if (m?.[1]) { h.invoice_description = m[1].trim(); notes.push('invoice_description recovered from labelled text'); }
+  }
+  if (blank(h.invoice_currency)) {
+    const currency = text.match(/\\b(USD|EUR|GBP|CAD|AUD)\\b/i);
+    if (currency?.[1]) { h.invoice_currency = currency[1].toUpperCase(); notes.push(`invoice_currency recovered: ${h.invoice_currency}`); }
+    else if (/\\$\\s*\\d/.test(text)) { h.invoice_currency = 'USD'; notes.push('invoice_currency inferred from explicit dollar symbol'); }
   }
 
   if (blank(h.payment_terms)) {
