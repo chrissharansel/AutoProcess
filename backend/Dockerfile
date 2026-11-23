@@ -1,38 +1,44 @@
 
 FROM node:22-bookworm-slim
-RUN npm install -g @github/copilot
-# Install OCR and Python system dependencies
+
+WORKDIR /app
+
+# Install system dependencies for OCR and PDF processing
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-venv \
     tesseract-ocr \
+    tesseract-ocr-eng \
+    poppler-utils \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Create Python environment and install PyMuPDF
-RUN python3 -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir pymupdf
+# Create a Python virtual environment
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-WORKDIR /app/backend
+# Install Python OCR dependencies
+COPY requirements-ocr.txt ./
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements-ocr.txt
 
-# Install Node dependencies
+# Install backend dependencies
 COPY package*.json ./
 RUN npm ci
+
+# Install GitHub Copilot CLI
+RUN npm install -g @github/copilot
 
 # Copy backend source
 COPY . .
 
-# Compile TypeScript
+# Build TypeScript backend
 RUN npm run build
 
-# Copy Python helper into the compiled services directory
-RUN mkdir -p dist/services uploads \
-    && cp src/services/render_pdf_pages.py dist/services/
-
 ENV NODE_ENV=production
-ENV PYTHON_EXECUTABLE=/opt/venv/bin/python
-ENV UPLOAD_DIR=/app/backend/uploads
+ENV PYTHON_BIN=/opt/venv/bin/python
+ENV TESSERACT_PATH=/usr/bin/tesseract
 ENV TESSERACT_LANG=eng
-ENV PORT=10000
 
 EXPOSE 10000
 

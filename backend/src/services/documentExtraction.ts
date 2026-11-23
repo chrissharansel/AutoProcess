@@ -192,7 +192,12 @@ async function runOcrHelper(filePath: string, mimeType: string): Promise<TextAcq
       timeout: Number(process.env.OCR_TIMEOUT_MS || 180000),
       maxBuffer: 20 * 1024 * 1024,
       windowsHide: true,
-      env: { ...process.env },
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PYTHONIOENCODING: 'utf-8',
+        PYTHONUTF8: '1',
+      },
     });
     stdout = result.stdout || '';
   } catch (error: any) {

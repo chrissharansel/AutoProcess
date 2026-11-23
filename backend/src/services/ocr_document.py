@@ -10,6 +10,17 @@ from pathlib import Path
 
 warnings.filterwarnings('ignore')
 
+# The helper communicates with Node.js through stdout as JSON. Force a safe
+# encoding for Windows terminals/process pipes and replace unsupported glyphs.
+# JSON is emitted with ensure_ascii=True below, so the protocol stays ASCII-only.
+for _stream_name in ('stdout', 'stderr'):
+    _stream = getattr(sys, _stream_name, None)
+    if _stream is not None and hasattr(_stream, 'reconfigure'):
+        try:
+            _stream.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
+        except Exception:
+            pass
+
 def env_int(name: str, default: int) -> int:
     try:
         return max(1, int(os.environ.get(name, default)))
@@ -153,12 +164,12 @@ def process_image(file_path):
 
 def main():
     if len(sys.argv) < 2:
-        print(json.dumps({'error': 'Usage: ocr_document.py <file> [mime]'}))
+        print(json.dumps({'error': 'Usage: ocr_document.py <file> [mime]'}, ensure_ascii=True), flush=True)
         return 2
     file_path = sys.argv[1]
     mime = (sys.argv[2] if len(sys.argv) > 2 else '').lower()
     if not Path(file_path).exists():
-        print(json.dumps({'error': f'File not found: {file_path}'}))
+        print(json.dumps({'error': f'File not found: {file_path}'}, ensure_ascii=True), flush=True)
         return 1
     try:
         suffix = Path(file_path).suffix.lower()
@@ -169,10 +180,10 @@ def main():
         else:
             raw = Path(file_path).read_text(encoding='utf-8', errors='ignore')
             result = {'text': raw, 'pages': 1, 'method': 'plain', 'chars': len(raw)}
-        print(json.dumps(result, ensure_ascii=False))
+        print(json.dumps(result, ensure_ascii=True), flush=True)
         return 0
     except Exception as exc:
-        print(json.dumps({'error': str(exc)}, ensure_ascii=False))
+        print(json.dumps({'error': str(exc)}, ensure_ascii=True), flush=True)
         return 1
 
 if __name__ == '__main__':
