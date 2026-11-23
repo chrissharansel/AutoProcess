@@ -1,118 +1,170 @@
-import { Router } from 'express';
-import { Agent, AgentTool, AgentExecution } from '../models/agent';
+import { Router, Response } from 'express';
+import { z } from 'zod';
+import { Agent, AgentTool, AgentVersion, AgentExecution } from '../models/agent';
+import { DocumentModel, Workflow } from '../models';
 import { AuthRequest } from '../middleware/auth';
-import { runAgent } from '../services/agentRuntime';
+import { wrap, HttpError } from '../middleware/errorHandler';
+import { validateBody } from '../middleware/validate';
+import { schemaProblem } from '../services/schema';
+import { startExecution, runPipeline } from '../services/pipeline';
+import { validateWorkflowDefinition } from '../services/workflowEngine';
+import { audit } from '../services/audit';
 
 const router = Router();
-const safeToolName = (s: string) => /^[a-zA-Z][a-zA-Z0-9_]{1,63}$/.test(s);
+const oidStr = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id');
 
-// Tools are workspace-scoped, configurable HTTP integrations. Secrets should be
-// referenced as {{ENV:VARIABLE_NAME}} in headers and kept in backend/.env.
-router.get('/tools', async (req: AuthRequest, res, next) => {
-  try { res.json(await AgentTool.find({ workspaceId: req.query.workspaceId, userId: req.userId }).sort({ createdAt: -1 }).lean()); }
-  catch (e) { next(e); }
-});
-router.post('/tools', async (req: AuthRequest, res, next) => {
-  try {
-    const { workspaceId, name, functionName, description, method, endpoint, headers, parameters, authType, authConfig, timeoutMs, retryCount, responseDescription, enabled } = req.body || {};
-    if (!workspaceId || !name || !description || !endpoint || !safeToolName(name)) return res.status(400).json({ error: 'workspaceId, valid tool name, description and endpoint are required.' });
-    const parsed = new URL(endpoint);
-    if (!['http:', 'https:'].includes(parsed.protocol)) return res.status(400).json({ error: 'Tool endpoint must use HTTP or HTTPS.' });
-    const tool = await AgentTool.create({
-      workspaceId, userId: req.userId, name, functionName: functionName || name, description,
-      method: method || 'GET', endpoint, headers: headers || {},
-      parameters: parameters || { type: 'object', properties: {} },
-      authType: authType || 'none', authConfig: authConfig || {},
-      timeoutMs: timeoutMs || 20000, retryCount: retryCount || 0,
-      responseDescription, enabled: enabled !== false
-    });
-    res.status(201).json(tool);
-  } catch (e: any) { if (e.code === 11000) return res.status(409).json({ error: 'Tool name already exists.' }); next(e); }
+const agentBody = z.object({
+  name: z.string().trim().min(2).max(120),
+  description: z.string().max(1000).optional().default(''),
+  systemPrompt: z.string().min(5).max(60000),
+  model: z.string().trim().min(1).max(120).default('llama3.2:latest'),
+  temperature: z.number().min(0).max(2).default(0.1),
+  maxIterations: z.number().int().min(1).max(12).optional(),
+  maxToolRounds: z.number().int().min(1).max(12).optional(),
+  toolIds: z.array(oidStr).max(30).default([]),
+  promptIds: z.array(oidStr).max(20).default([]),
+  outputSchema: z.record(z.string(), z.any()).default({}),
+  outputSchemaId: oidStr.nullable().optional(),
+  workflowId: oidStr.nullable().optional(),
+  postProcess: z.object({ type: z.string(), poTool: z.string().optional(), supplierLookupWhenNoPo: z.boolean().optional(), amountTolerance: z.number().optional() }).nullable().optional(),
+  schemaRepairAttempts: z.number().int().min(0).max(4).default(2),
+  isActive: z.boolean().default(true),
+  note: z.string().max(300).optional(),
 });
 
-// Test a tool with sample arguments (secrets resolved server-side only)
-router.post('/tools/:id/test', async (req: AuthRequest, res, next) => {
-  try {
-    const tool: any = await AgentTool.findOne({ _id: req.params.id, workspaceId: req.body.workspaceId || req.query.workspaceId, userId: req.userId }).lean();
-    if (!tool) return res.status(404).json({ error: 'Tool not found.' });
-    if (!tool.enabled) return res.status(400).json({ error: 'Tool is disabled.' });
-    const { executeHttpTool } = await import('../services/agentRuntime');
-    const args = req.body.args || {};
-    const started = Date.now();
-    try {
-      const result = await executeHttpTool(tool, args);
-      res.json({ success: true, durationMs: Date.now() - started, result });
-    } catch (err: any) {
-      res.status(400).json({ success: false, durationMs: Date.now() - started, error: err.message || String(err) });
-    }
-  } catch (e) { next(e); }
-});
-router.put('/tools/:id', async (req: AuthRequest, res, next) => {
-  try {
-    const patch = { ...req.body }; delete patch.workspaceId; delete patch.userId;
-    if (patch.name && !safeToolName(patch.name)) return res.status(400).json({ error: 'Tool name must be a valid function identifier.' });
-    if (patch.endpoint) { const u = new URL(patch.endpoint); if (!['http:', 'https:'].includes(u.protocol)) return res.status(400).json({ error: 'Only HTTP/HTTPS endpoints are allowed.' }); }
-    const tool = await AgentTool.findOneAndUpdate({ _id: req.params.id, workspaceId: req.body.workspaceId, userId: req.userId }, patch, { new: true, runValidators: true });
-    if (!tool) return res.status(404).json({ error: 'Tool not found.' }); res.json(tool);
-  } catch (e) { next(e); }
-});
-router.delete('/tools/:id', async (req: AuthRequest, res, next) => {
-  try { const deleted = await AgentTool.findOneAndDelete({ _id: req.params.id, workspaceId: req.query.workspaceId, userId: req.userId }); if (!deleted) return res.status(404).json({ error: 'Tool not found.' }); await Agent.updateMany({ toolIds: deleted._id }, { $pull: { toolIds: deleted._id } }); res.json({ success: true }); }
-  catch (e) { next(e); }
-});
-
-router.get('/', async (req: AuthRequest, res, next) => {
-  try { res.json(await Agent.find({ workspaceId: req.query.workspaceId, userId: req.userId }).populate('toolIds').sort({ updatedAt: -1 }).lean()); }
-  catch (e) { next(e); }
-});
-router.post('/', async (req: AuthRequest, res, next) => {
-  try {
-    const { workspaceId, name, description, systemPrompt, model, toolIds, outputSchema, maxIterations, isActive } = req.body || {};
-    if (!workspaceId || !name || !systemPrompt) return res.status(400).json({ error: 'workspaceId, name and systemPrompt are required.' });
-    const validTools = await AgentTool.find({ _id: { $in: toolIds || [] }, workspaceId, userId: req.userId }).select('_id').lean();
-    const agent = await Agent.create({ workspaceId, userId: req.userId, name, description, systemPrompt, model: model || 'gpt-4o', toolIds: validTools.map((t: any) => t._id), outputSchema: outputSchema || {}, maxIterations: maxIterations || 6, isActive: isActive !== false });
-    res.status(201).json(agent);
-  } catch (e) { next(e); }
-});
-router.put('/:id', async (req: AuthRequest, res, next) => {
-  try {
-    const patch = { ...req.body }; delete patch.workspaceId; delete patch.userId;
-    if (patch.toolIds) { const valid = await AgentTool.find({ _id: { $in: patch.toolIds }, workspaceId: req.body.workspaceId, userId: req.userId }).select('_id').lean(); patch.toolIds = valid.map((t: any) => t._id); }
-    const agent = await Agent.findOneAndUpdate({ _id: req.params.id, workspaceId: req.body.workspaceId, userId: req.userId }, patch, { new: true, runValidators: true });
-    if (!agent) return res.status(404).json({ error: 'Agent not found.' }); res.json(agent);
-  } catch (e) { next(e); }
-});
-router.delete('/:id', async (req: AuthRequest, res, next) => {
-  try { const a = await Agent.findOneAndDelete({ _id: req.params.id, workspaceId: req.query.workspaceId, userId: req.userId }); if (!a) return res.status(404).json({ error: 'Agent not found.' }); res.json({ success: true }); }
-  catch (e) { next(e); }
-});
-router.post('/:id/run', async (req: AuthRequest, res, next) => {
-  let execution: any;
-  try {
-    const { workspaceId, input, context } = req.body || {};
-    if (!workspaceId || !input) return res.status(400).json({ error: 'workspaceId and input are required.' });
-    const agent: any = await Agent.findOne({ _id: req.params.id, workspaceId, userId: req.userId, isActive: true }).lean();
-    if (!agent) return res.status(404).json({ error: 'Active agent not found.' });
-    execution = await AgentExecution.create({ agentId: agent._id, workspaceId, userId: req.userId, input: { input, context }, status: 'running' });
-    const result = await runAgent(agent, String(input), context || {}, (step) => { AgentExecution.updateOne({ _id: execution._id }, { $push: { steps: step } }).catch(() => undefined); });
-    await AgentExecution.updateOne({ _id: execution._id }, { status: 'completed', output: result.output, steps: result.steps, completedAt: new Date() });
-    res.json({ executionId: execution._id.toString(), output: result.output, steps: result.steps });
-  } catch (e: any) {
-    if (execution) await AgentExecution.updateOne({ _id: execution._id }, { status: 'failed', error: e.message, completedAt: new Date() });
-    next(e);
+async function prepare(req: AuthRequest, b: z.infer<typeof agentBody>) {
+  const se = Object.keys(b.outputSchema).length ? schemaProblem(b.outputSchema) : null;
+  if (se) throw new HttpError(400, `Output schema: ${se}`);
+  const unique = [...new Set(b.toolIds)];
+  const found: any[] = await AgentTool.find({ _id: { $in: unique }, workspaceId: req.workspaceId }).select('_id enabled name').lean();
+  const missing = unique.filter((id) => !found.some((f) => String(f._id) === id));
+  if (missing.length) throw new HttpError(400, `These tools do not exist in this workspace, so they were not attached: ${missing.join(', ')}.`);
+  const disabled = found.filter((f) => !f.enabled);
+  if (disabled.length) throw new HttpError(409, `Enable these tools before attaching them: ${disabled.map((d) => d.name).join(', ')}.`);
+  if (b.workflowId) {
+    const wf: any = await Workflow.findOne({ _id: b.workflowId, workspaceId: req.workspaceId }).lean();
+    if (!wf) throw new HttpError(400, 'Workflow not found in this workspace.');
+    const errs = validateWorkflowDefinition(wf.definition); if (errs.length) throw new HttpError(400, `Workflow is invalid: ${errs[0]}`);
   }
+  const { note: _n, maxToolRounds, maxIterations, ...rest } = b;
+  return { ...rest, toolIds: unique, maxIterations: maxToolRounds ?? maxIterations ?? 6, outputSchemaId: b.outputSchemaId || undefined, workflowId: b.workflowId || undefined };
+}
+
+const snapshot = (a: any) => ({ name: a.name, description: a.description, systemPrompt: a.systemPrompt, model: a.model, temperature: a.temperature, maxIterations: a.maxIterations, toolIds: (a.toolIds || []).map(String), promptIds: (a.promptIds || []).map(String), outputSchema: a.outputSchema, outputSchemaId: a.outputSchemaId ? String(a.outputSchemaId) : null, postProcess: a.postProcess || null });
+
+async function present(a: any) {
+  const o = a.toObject ? a.toObject() : a;
+  const tools: any[] = await AgentTool.find({ _id: { $in: o.toolIds || [] } }).select('name functionName method enabled').lean();
+  return { ...o, id: String(o._id), tools: tools.map((t) => ({ id: String(t._id), name: t.name, functionName: t.functionName || t.name, method: t.method, enabled: t.enabled })), toolCount: tools.length, toolIds: tools.map((t) => String(t._id)) };
+}
+
+router.get('/', wrap(async (req: AuthRequest, res: Response) => {
+  const q = String(req.query.q || '').trim();
+  const filter: any = { workspaceId: req.workspaceId, ...(q ? { name: new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') } : {}) };
+  const agents = await Agent.find(filter).sort({ updatedAt: -1 }).lean();
+  res.json(await Promise.all(agents.map(present)));
+}));
+
+router.post('/', validateBody(agentBody), wrap(async (req: AuthRequest, res: Response) => {
+  const data = await prepare(req, req.body);
+  const a = await Agent.create({ ...data, workspaceId: req.workspaceId, userId: req.userId, version: 1 });
+  await AgentVersion.create({ agentId: a._id, version: 1, snapshot: snapshot(a), note: req.body.note || 'Created', workspaceId: req.workspaceId, userId: req.userId });
+  await audit({ workspaceId: req.workspaceId!, userId: req.userId, userEmail: req.userEmail, action: 'agent.create', entityType: 'agent', entityId: String(a._id), meta: { name: a.name } });
+  res.status(201).json(await present(a));
+}));
+
+router.get('/:id', wrap(async (req: AuthRequest, res: Response) => {
+  const a = await Agent.findOne({ _id: req.params.id, workspaceId: req.workspaceId }).lean();
+  if (!a) throw new HttpError(404, 'Agent not found.');
+  res.json(await present(a));
+}));
+
+router.put('/:id', validateBody(agentBody), wrap(async (req: AuthRequest, res: Response) => {
+  const cur: any = await Agent.findOne({ _id: req.params.id, workspaceId: req.workspaceId });
+  if (!cur) throw new HttpError(404, 'Agent not found.');
+  const data = await prepare(req, req.body);
+  const before = JSON.stringify(snapshot(cur));
+  cur.set(data);
+  const changed = JSON.stringify(snapshot(cur)) !== before;
+  if (changed) cur.version = (cur.version || 1) + 1;
+  await cur.save();
+  if (changed) await AgentVersion.create({ agentId: cur._id, version: cur.version, snapshot: snapshot(cur), note: req.body.note || '', workspaceId: req.workspaceId, userId: req.userId });
+  await audit({ workspaceId: req.workspaceId!, userId: req.userId, userEmail: req.userEmail, action: 'agent.update', entityType: 'agent', entityId: String(cur._id), meta: { version: cur.version } });
+  res.json(await present(cur));
+}));
+
+router.patch('/:id/active', validateBody(z.object({ isActive: z.boolean() })), wrap(async (req: AuthRequest, res: Response) => {
+  const a = await Agent.findOneAndUpdate({ _id: req.params.id, workspaceId: req.workspaceId }, { isActive: req.body.isActive }, { new: true });
+  if (!a) throw new HttpError(404, 'Agent not found.');
+  await audit({ workspaceId: req.workspaceId!, userId: req.userId, userEmail: req.userEmail, action: req.body.isActive ? 'agent.activate' : 'agent.deactivate', entityType: 'agent', entityId: String(a._id) });
+  res.json(await present(a));
+}));
+
+router.post('/:id/duplicate', wrap(async (req: AuthRequest, res: Response) => {
+  const a: any = await Agent.findOne({ _id: req.params.id, workspaceId: req.workspaceId }).lean();
+  if (!a) throw new HttpError(404, 'Agent not found.');
+  const { _id, createdAt, updatedAt, __v, ...rest } = a; void _id; void createdAt; void updatedAt; void __v;
+  const copy = await Agent.create({ ...rest, name: `Copy of ${a.name}`.slice(0, 120), isActive: false, version: 1, userId: req.userId });
+  await AgentVersion.create({ agentId: copy._id, version: 1, snapshot: snapshot(copy), note: `Duplicated from ${a.name}`, workspaceId: req.workspaceId, userId: req.userId });
+  await audit({ workspaceId: req.workspaceId!, userId: req.userId, userEmail: req.userEmail, action: 'agent.duplicate', entityType: 'agent', entityId: String(copy._id) });
+  res.status(201).json(await present(copy));
+}));
+
+router.delete('/:id', wrap(async (req: AuthRequest, res: Response) => {
+  const a = await Agent.findOneAndDelete({ _id: req.params.id, workspaceId: req.workspaceId });
+  if (!a) throw new HttpError(404, 'Agent not found.');
+  await AgentVersion.deleteMany({ agentId: a._id });
+  await audit({ workspaceId: req.workspaceId!, userId: req.userId, userEmail: req.userEmail, action: 'agent.delete', entityType: 'agent', entityId: String(a._id), meta: { name: a.name } });
+  res.json({ success: true });
+}));
+
+router.get('/:id/versions', wrap(async (req: AuthRequest, res: Response) => {
+  res.json(await AgentVersion.find({ agentId: req.params.id, workspaceId: req.workspaceId }).sort({ version: -1 }).limit(100).lean());
+}));
+
+router.post('/:id/versions/:version/restore', wrap(async (req: AuthRequest, res: Response) => {
+  const v: any = await AgentVersion.findOne({ agentId: req.params.id, version: Number(req.params.version), workspaceId: req.workspaceId }).lean();
+  const cur: any = await Agent.findOne({ _id: req.params.id, workspaceId: req.workspaceId });
+  if (!v || !cur) throw new HttpError(404, 'Version not found.');
+  const live: any[] = await AgentTool.find({ _id: { $in: v.snapshot.toolIds || [] }, workspaceId: req.workspaceId }).select('_id').lean();
+  cur.set({ ...v.snapshot, toolIds: live.map((t) => t._id), outputSchemaId: v.snapshot.outputSchemaId || undefined });
+  cur.version += 1; await cur.save();
+  await AgentVersion.create({ agentId: cur._id, version: cur.version, snapshot: snapshot(cur), note: `Restored from v${v.version}`, workspaceId: req.workspaceId, userId: req.userId });
+  await audit({ workspaceId: req.workspaceId!, userId: req.userId, userEmail: req.userEmail, action: 'agent.restore', entityType: 'agent', entityId: String(cur._id), meta: { from: v.version } });
+  res.json(await present(cur));
+}));
+
+const runBody = z.object({
+  input: z.string().max(20000).optional(), context: z.record(z.string(), z.any()).optional(), sampleText: z.string().max(200000).optional(),
+  documentId: oidStr.optional(), workflowId: oidStr.optional(), allowSensitive: z.boolean().optional(),
 });
 
-router.get('/executions', async (req: AuthRequest, res, next) => {
-  try {
-    const items = await AgentExecution.find({ workspaceId: req.query.workspaceId, userId: req.userId })
-      .sort({ createdAt: -1 }).limit(30).populate('agentId', 'name model').lean();
-    res.json(items);
-  } catch (e) { next(e); }
-});
+async function launch(req: AuthRequest, res: Response, isTest: boolean) {
+  const agent: any = await Agent.findOne({ _id: req.params.id, workspaceId: req.workspaceId }).lean();
+  if (!agent) throw new HttpError(404, 'Agent not found.');
+  if (!isTest && !agent.isActive) throw new HttpError(409, 'This agent is inactive. Test it, then activate it to run it for real.');
+  const b = req.body as z.infer<typeof runBody>;
+  let document: any = null;
+  if (b.documentId) { document = await DocumentModel.findOne({ _id: b.documentId, workspaceId: req.workspaceId }); if (!document) throw new HttpError(404, 'Document not found.'); }
+  if (!document && !b.input && !b.sampleText) throw new HttpError(400, 'Provide a task (input), sample text, or a document.');
+  let steps; const wfId = b.workflowId || agent.workflowId;
+  if (wfId) { const wf: any = await Workflow.findOne({ _id: wfId, workspaceId: req.workspaceId, isActive: true }).lean(); if (wf) steps = wf.definition.steps; }
+  const context = { ...(b.context || {}), ...(b.sampleText ? { document_text: b.sampleText } : {}) };
+  const input = { task: b.input, context };
+  const ex = await startExecution({ agent, workspaceId: req.workspaceId!, userId: req.userId!, document, input, isTest, workflowId: wfId ? String(wfId) : undefined });
+  const job = runPipeline({ executionId: String(ex._id), agent, steps, document, workspaceId: req.workspaceId!, userId: req.userId!, userEmail: req.userEmail, input, allowSensitive: !!b.allowSensitive });
+  if (req.query.wait === 'true') return res.json(await job);
+  job.catch((e) => console.error('[pipeline]', e));
+  res.status(202).json({ executionId: String(ex._id), status: 'running' });
+}
+router.post('/:id/execute', validateBody(runBody), wrap((req: AuthRequest, res: Response) => launch(req, res, false)));
+router.post('/:id/test', validateBody(runBody), wrap((req: AuthRequest, res: Response) => launch(req, res, true)));
 
-router.get('/executions/:executionId', async (req: AuthRequest, res, next) => {
-  try { const item = await AgentExecution.findOne({ _id: req.params.executionId, workspaceId: req.query.workspaceId, userId: req.userId }).lean(); if (!item) return res.status(404).json({ error: 'Execution not found.' }); res.json(item); }
-  catch (e) { next(e); }
-});
+// legacy alias used by the previous Agent Studio
+router.post('/:id/run', validateBody(runBody), wrap((req: AuthRequest, res: Response) => { req.query.wait = 'true'; return launch(req, res, false); }));
+
+router.get('/:id/executions', wrap(async (req: AuthRequest, res: Response) => {
+  res.json(await AgentExecution.find({ agentId: req.params.id, workspaceId: req.workspaceId }).sort({ createdAt: -1 }).limit(50).select('-trace -output -rawOutput -enrichment -steps').lean());
+}));
+
 export default router;

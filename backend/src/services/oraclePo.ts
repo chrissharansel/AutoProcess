@@ -39,7 +39,10 @@ export async function getOraclePoDetails(params: {
   else url.searchParams.set('supplier_name', supplierName!);
 
   const headers: Record<string, string> = { Accept: 'application/json' };
-  if (process.env.ORACLE_PO_API_BEARER_TOKEN) {
+  if (process.env.ORACLE_PO_API_USERNAME && process.env.ORACLE_PO_API_PASSWORD) {
+    // HTTP Basic auth, generated here at call time; credentials stay in backend env only.
+    headers.Authorization = `Basic ${Buffer.from(`${process.env.ORACLE_PO_API_USERNAME}:${process.env.ORACLE_PO_API_PASSWORD}`).toString('base64')}`;
+  } else if (process.env.ORACLE_PO_API_BEARER_TOKEN) {
     headers.Authorization = `Bearer ${process.env.ORACLE_PO_API_BEARER_TOKEN}`;
   }
 
@@ -127,7 +130,7 @@ function lineType(line: AnyRecord): string {
 }
 
 /**
- * Enrich OCR extraction with Oracle's authoritative supplier/PO master data,
+ * Enrich document extraction with Oracle's authoritative supplier/PO master data,
  * then construct the invoice API request body. Extraction data is retained for
  * traceability; unresolved PO line matches remain blank rather than guessed.
  */
@@ -149,11 +152,7 @@ export async function enrichAndBuildInvoicePayload(extracted: AnyRecord, rawText
     if (poNumber) {
       lookupType = 'po_number';
       poDetails = await getOraclePoDetails({ poNumber });
-      // If the PO lookup has no record, try the supplier master lookup as a safe fallback.
-      if (!poDetails && extractedSupplier) {
-        lookupType = 'supplier_name';
-        poDetails = await getOraclePoDetails({ supplierName: extractedSupplier });
-      }
+      // A failed PO lookup is recorded as such. No approximate supplier is substituted.
     } else if (extractedSupplier) {
       lookupType = 'supplier_name';
       poDetails = await getOraclePoDetails({ supplierName: extractedSupplier });

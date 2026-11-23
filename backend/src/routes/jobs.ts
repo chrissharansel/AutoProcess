@@ -6,10 +6,9 @@ const router = Router();
 
 router.get('/', async (req: AuthRequest, res, next) => {
   try {
-    const workspaceId = req.query.workspaceId as string;
+    const workspaceId = req.workspaceId as string;
     const status = req.query.status as string | undefined;
 
-    if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
 
     const filter: any = { workspaceId };
     if (status) filter.status = status;
@@ -53,7 +52,7 @@ router.get('/', async (req: AuthRequest, res, next) => {
 
 router.get('/:id', async (req: AuthRequest, res, next) => {
   try {
-    const job = await Job.findById(req.params.id).lean();
+    const job = await Job.findOne({ _id: req.params.id, workspaceId: req.workspaceId }).lean();
     if (!job) return res.status(404).json({ error: 'Job not found' });
 
     const [document, extraction, form, workflow] = await Promise.all([
@@ -85,7 +84,8 @@ router.patch('/:id/status', async (req: AuthRequest, res, next) => {
     if (outputData) update.outputData = outputData;
     if (status === 'completed') update.completedAt = new Date();
 
-    const job = await Job.findByIdAndUpdate(req.params.id, update, { new: true });
+    const job = await Job.findOneAndUpdate(
+      { _id: req.params.id, workspaceId: req.workspaceId }, update, { new: true });
     if (!job) return res.status(404).json({ error: 'Job not found' });
     res.json(job);
   } catch (err) {

@@ -675,3 +675,6 @@ input, textarea, select { font-family: inherit; }
 .secondary-btn { display:inline-flex; align-items:center; padding:10px 14px; border-radius:10px; border:1px solid var(--border); background:var(--bg-elevated); color:var(--text); font-size:0.88rem; }
 .secondary-btn:hover { background:var(--bg-hover); }
 .eyebrow { font-size:0.7rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--text-muted); font-weight:600; }
+
+/* Tailwind utilities (preflight disabled) — kept last so utilities can override component CSS */
+@tailwind utilities;

@@ -1,10 +1,10 @@
 /**
- * AutoProcess document extraction (OCR + GitHub Copilot LLM).
+ * AutoProcess document extraction using the user's existing Ollama 0.40.x.
  *
  * Text PDFs: pdf-parse text layer where available.
- * Scanned PDFs/images: render PDF pages with PyMuPDF, then OCR with Tesseract.
- * Final structured extraction: GitHub Copilot CLI (same authentication path as ApplyAI).
- * Local Ollama is no longer used.
+ * Scanned PDFs/images: render PDF pages with PyMuPDF, then OCR with the
+ * locally installed Tesseract executable. No Ollama vision architecture used.
+ * Final structured extraction: text-only Ollama model (llama3.2:latest).
  */
 import fs from 'fs/promises';
 import path from 'path';
@@ -12,9 +12,8 @@ import os from 'os';
 import { promisify } from 'util';
 import { execFile } from 'child_process';
 
-import { completeJson, getLlmConfig, chatCompletion } from './llm';
-
 const execFileAsync = promisify(execFile);
+import { ollamaBase, ollamaModel } from '../config/runtime';
 
 const SYSTEM_RULES = `You are a strict document data extraction engine.
 Use only the supplied document text. Copy values exactly where possible.
@@ -65,7 +64,7 @@ function cleanJson(text: string): string {
   out = out.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   const start = out.indexOf('{');
   const end = out.lastIndexOf('}');
-  if (start < 0 || end <= start) throw new Error(`GitHub Copilot did not return a JSON object: ${out.slice(0, 500)}`);
+  if (start < 0 || end <= start) throw new Error(`Ollama did not return a JSON object: ${out.slice(0, 500)}`);
   return out.slice(start, end + 1);
 }
 
@@ -127,6 +126,11 @@ function isGarbageText(text: string): boolean {
   const sample = text.slice(0, 4000);
   const useful = (sample.match(/[A-Za-z0-9]/g) || []).length;
   return useful / Math.max(sample.length, 1) < 0.12;
+}
+
+function isConnError(err: any): boolean {
+  const msg = String(err?.message || '');
+  return msg.includes('ECONNREFUSED') || msg.includes('fetch failed') || err?.cause?.code === 'ECONNREFUSED';
 }
 
 function findTesseract(): string {
@@ -290,25 +294,25 @@ function wrap(result: any, meta: ExtractMeta, confidence: number) {
   return { result: { ...result, _debug: meta }, confidence };
 }
 
-async function callLlm(documentText: string, prompt: string, outputSchema?: Record<string, any>): Promise<any> {
-  const schemaHint = outputSchema && Object.keys(outputSchema).length
-    ? `
-Required JSON schema/shape:
-${JSON.stringify(outputSchema, null, 2)}`
-    : `
-Preferred JSON shape:
-${JSON_SHAPE}`;
-  const system = `${SYSTEM_RULES}${schemaHint}
-Return only valid JSON.`;
-  const user = `${prompt || 'Extract the invoice fields.'}
+async function callOllama(documentText: string, prompt: string, outputSchema?: Record<string, any>): Promise<any> {
+  const schemaText = outputSchema
+    ? `Return a JSON object matching this user schema:\n${JSON.stringify(outputSchema, null, 2)}`
+    : `Use this JSON structure, filling fields only when supported by the document:\n${JSON_SHAPE}`;
 
---- DOCUMENT TEXT ---
-${String(documentText || '').slice(0, 100000)}`;
-  const out = await completeJson({ system, user, temperature: 0.1 });
-  const start = out.indexOf('{');
-  const end = out.lastIndexOf('}');
-  if (start < 0 || end <= start) throw new Error(`Copilot did not return a JSON object: ${out.slice(0, 500)}`);
-  return JSON.parse(out.slice(start, end + 1));
+  const response = await fetch(`${ollamaBase()}/api/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: ollamaModel(),
+      prompt: `${SYSTEM_RULES}\n\nTASK:\n${prompt || 'Extract all invoice fields.'}\n\n${schemaText}\n\nDOCUMENT TEXT:\n<<<\n${documentText}\n>>>`,
+      stream: false,
+      format: 'json',
+      options: { temperature: 0, num_predict: 3072 },
+    }),
+  });
+  if (!response.ok) throw new Error(`Ollama ${response.status}: ${await response.text()}`);
+  const payload = await response.json() as { response?: string };
+  return JSON.parse(cleanJson(payload.response || ''));
 }
 
 
@@ -321,25 +325,26 @@ export async function extractFromText(
   if (isGarbageText(text)) {
     return wrap(
       { error: 'No readable text could be extracted from this document', fix: 'Check PDF quality or install/configure Tesseract OCR.' },
-      { method: 'none', model: getLlmConfig().defaultModel, textLength: text?.length || 0, textPreview: text?.slice(0, 160) },
+      { method: 'none', model: ollamaModel(), textLength: text?.length || 0, textPreview: text?.slice(0, 160) },
       0
     );
   }
 
   try {
-    const result = normalizeInvoiceFields(await callLlm(text.slice(0, 45000), prompt, outputSchema), text);
+    const result = normalizeInvoiceFields(await callOllama(text.slice(0, 45000), prompt, outputSchema), text);
     return {
       ...wrap(
         result,
-        { method, model: getLlmConfig().defaultModel, textLength: text.length, textPreview: text.slice(0, 500) },
+        { method, model: ollamaModel(), textLength: text.length, textPreview: text.slice(0, 500) },
         0.85
       ),
       rawText: text,
     };
   } catch (err: any) {
-    console.error('[extract] GitHub Copilot CLI text extraction failed:', err.message);
-    // Do not rewrite CLI authentication/installation errors as proxy errors.
-    // The CLI service returns the actionable message (install/login/timeout).
+    console.error('[extract] Ollama text extraction failed:', err.message);
+    if (isConnError(err)) {
+      throw new Error(`Cannot connect to Ollama at ${ollamaBase()}. Start Ollama and test: ollama run ${ollamaModel()}`);
+    }
     throw err;
   }
 }
@@ -353,7 +358,7 @@ export async function extractFromDocument(
   const lower = filePath.toLowerCase();
   const isPdf = mimeType === 'application/pdf' || lower.endsWith('.pdf');
   const isImage = mimeType.startsWith('image/') || /\.(png|jpe?g|webp|bmp|tif|tiff)$/i.test(lower);
-  console.log(`[extract] file=${path.basename(filePath)} mime=${mimeType} model=${getLlmConfig().defaultModel}`);
+  console.log(`[extract] file=${path.basename(filePath)} mime=${mimeType} model=${ollamaModel()}`);
 
   if (isPdf) {
     let text = '';
@@ -418,26 +423,82 @@ export async function answerDocumentQuestion(
     .map((item) => `${item.role === 'user' ? 'USER' : 'ASSISTANT'}: ${String(item.content).slice(0, 2000)}`)
     .join('\n');
 
-  const { message } = await chatCompletion({
-    temperature: 0.2,
-    messages: [
-      {
-        role: 'system',
-        content: `You are AutoProcess Invoice Assistant. Answer using ONLY the document context.
+  const response = await fetch(`${ollamaBase()}/api/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: ollamaModel(),
+      stream: false,
+      options: { temperature: 0.2, num_predict: 700 },
+      prompt: `You are AutoProcess Invoice Assistant. Answer the user's question using ONLY the document context below.
 Rules:
 - Be clear, concise and helpful.
-- Do not invent missing invoice information.
+- Do not invent or assume missing invoice information.
 - If a value is not present, say it is not available in the extracted document.
-- Distinguish OCR-extracted values from Oracle-enriched values when both appear.
-- Format answers with readable Markdown.`,
-      },
-      {
-        role: 'user',
-        content: `DOCUMENT CONTEXT:\n${context}\n\nPREVIOUS CHAT TURNS:\n${conversation || '(none)'}\n\nUSER QUESTION:\n${question}`,
-      },
-    ],
+- For calculations, show the arithmetic and distinguish calculated values from printed invoice values.
+- If OCR appears ambiguous or inconsistent, mention that it should be verified against the original invoice.
+- Format answers with readable Markdown. Use bullets or a small table when useful.
+
+DOCUMENT CONTEXT:
+${context}
+
+PREVIOUS CHAT TURNS:
+${conversation || '(none)'}
+
+USER QUESTION:
+${question}
+
+ANSWER:`,
+    }),
   });
-  const answer = String(message.content || '').trim();
-  if (!answer) throw new Error('GitHub Copilot returned an empty answer.');
+
+  if (!response.ok) {
+    throw new Error(`Ollama ${response.status}: ${await response.text()}`);
+  }
+  const payload = await response.json() as { response?: string };
+  const answer = String(payload.response || '').trim();
+  if (!answer) throw new Error('Ollama returned an empty answer.');
   return answer;
+}
+
+
+/**
+ * Text acquisition only (no LLM): embedded PDF text first, Tesseract OCR fallback for scans/images.
+ * Used by the agent pipeline. Throws descriptive errors for OCR / rendering failures.
+ */
+export async function extractDocumentText(
+  filePath: string, mimeType: string, opts: { forceOcr?: boolean; onProgress?: (m: string) => void } = {}
+): Promise<{ text: string; method: 'embedded' | 'ocr' | 'plain'; pages: number }> {
+  const lower = filePath.toLowerCase();
+  const isPdf = mimeType === 'application/pdf' || lower.endsWith('.pdf');
+  const isImage = mimeType.startsWith('image/') || /\.(png|jpe?g|webp|bmp|tif|tiff)$/i.test(lower);
+  const say = opts.onProgress || (() => undefined);
+  if (isPdf) {
+    if (!opts.forceOcr) {
+      try {
+        const text = await extractPdfTextLayer(filePath);
+        if (!isGarbageText(text)) return { text, method: 'embedded', pages: Math.max(1, (text.match(/\f/g) || []).length + 1) };
+        say('Embedded PDF text is missing or insufficient — switching to OCR.');
+      } catch (err: any) { say(`Embedded text extraction unavailable (${err.message}) — switching to OCR.`); }
+    }
+    const tesseract = findTesseract();
+    const pages = await renderPdfPages(filePath, Number(process.env.OCR_MAX_PAGES || 10));
+    const parts: string[] = [];
+    for (let i = 0; i < pages.length; i++) {
+      say(`OCR page ${i + 1} of ${pages.length}`);
+      parts.push(`--- Page ${i + 1} ---\n${await ocrImageBuffer(pages[i], tesseract)}`);
+    }
+    const text = parts.join('\n\n').trim();
+    if (isGarbageText(text)) throw new Error('OCR finished but produced almost no readable text. Check scan quality, orientation, and the Tesseract language pack.');
+    return { text, method: 'ocr', pages: pages.length };
+  }
+  if (isImage) {
+    const tesseract = findTesseract();
+    say('Running OCR on image');
+    const text = await ocrImageBuffer(await fs.readFile(filePath), tesseract);
+    if (isGarbageText(text)) throw new Error('OCR finished but produced almost no readable text. Check image quality and orientation.');
+    return { text, method: 'ocr', pages: 1 };
+  }
+  if (mimeType.startsWith('text/') || /\.(txt|csv|json)$/i.test(lower)) return { text: await fs.readFile(filePath, 'utf-8'), method: 'plain', pages: 1 };
+  throw new Error(`Unsupported file type: ${mimeType}. Supported: PDF, PNG, JPG/JPEG.`);
 }

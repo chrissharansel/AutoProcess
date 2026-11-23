@@ -6,8 +6,7 @@ const router = Router();
 
 router.get('/', async (req: AuthRequest, res, next) => {
   try {
-    const workspaceId = req.query.workspaceId as string;
-    if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
+    const workspaceId = req.workspaceId as string;
 
     const forms = await Form.find({ workspaceId }).sort({ updatedAt: -1 });
     res.json(forms);
@@ -18,7 +17,7 @@ router.get('/', async (req: AuthRequest, res, next) => {
 
 router.get('/:id', async (req: AuthRequest, res, next) => {
   try {
-    const form = await Form.findById(req.params.id);
+    const form = await Form.findOne({ _id: req.params.id, workspaceId: req.workspaceId });
     if (!form) return res.status(404).json({ error: 'Form not found' });
     res.json(form);
   } catch (err) {
@@ -28,7 +27,8 @@ router.get('/:id', async (req: AuthRequest, res, next) => {
 
 router.post('/', async (req: AuthRequest, res, next) => {
   try {
-    const { name, description, schema, workspaceId } = req.body;
+    const { name, description, schema } = req.body;
+    const workspaceId = req.workspaceId;
     if (!name || !workspaceId || !schema) {
       return res.status(400).json({ error: 'name, workspaceId and schema required' });
     }
@@ -49,8 +49,8 @@ router.post('/', async (req: AuthRequest, res, next) => {
 router.put('/:id', async (req: AuthRequest, res, next) => {
   try {
     const { name, description, schema } = req.body;
-    const form = await Form.findByIdAndUpdate(
-      req.params.id,
+    const form = await Form.findOneAndUpdate(
+      { _id: req.params.id, workspaceId: req.workspaceId },
       { name, description, schema },
       { new: true }
     );
@@ -63,7 +63,7 @@ router.put('/:id', async (req: AuthRequest, res, next) => {
 
 router.delete('/:id', async (req: AuthRequest, res, next) => {
   try {
-    await Form.findByIdAndDelete(req.params.id);
+    await Form.findOneAndDelete({ _id: req.params.id, workspaceId: req.workspaceId });
     res.json({ success: true });
   } catch (err) {
     next(err);

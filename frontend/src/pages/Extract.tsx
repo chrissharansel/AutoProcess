@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import api from '../lib/api';
 import { useAuth } from '../lib/auth';
 
-// Render the common Markdown returned by the model as real UI elements.
+// Render the common Markdown returned by GitHub Copilot as real UI elements.
 // This keeps **bold**, headings and list markers from appearing literally.
 function renderInlineMarkdown(text: string): ReactNode[] {
   const tokenPattern = /(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*]+\*)/g;
@@ -109,7 +109,7 @@ export default function Extract() {
   const [chatLoading, setChatLoading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [processPhase, setProcessPhase] = useState<'idle'|'ocr'|'agent'|'done'>('idle');
+  const [processPhase, setProcessPhase] = useState<'idle'|'text'|'agent'|'done'>('idle');
 
   useEffect(() => {
     if (!workspace?.id) return;
@@ -167,7 +167,7 @@ export default function Extract() {
     e.preventDefault();
     if (!file || !workspace?.id) return;
     setLoading(true);
-    setProcessPhase('ocr');
+    setProcessPhase('text');
     setError('');
     setResult(null);
     setChatMessages([]);
@@ -237,7 +237,7 @@ export default function Extract() {
       <header className="page-header">
         <div>
           <h1>Document Extraction</h1>
-          <p className="subtitle">Upload a PDF, image or text file. OCR + GitHub Copilot extracts structured data</p>
+          <p className="subtitle">Upload a text-based PDF or text file. GitHub Copilot extracts structured data; OCR is disabled</p>
         </div>
       </header>
 
@@ -253,7 +253,7 @@ export default function Extract() {
             <input
               ref={fileRef}
               type="file"
-              accept=".pdf,.png,.jpg,.jpeg,.txt,.csv"
+              accept=".pdf,.txt,.csv,.json"
               hidden
               onChange={(e) => setFile(e.target.files?.[0] || null)}
             />
@@ -272,7 +272,7 @@ export default function Extract() {
               <>
                 <div className="drop-icon">↑</div>
                 <p>Drag & drop a document here</p>
-                <p className="muted">or click to browse (PDF, images, text)</p>
+                <p className="muted">or click to browse (text-based PDF, TXT, CSV, JSON)</p>
               </>
             )}
           </div>
@@ -284,7 +284,7 @@ export default function Extract() {
                 <input type="radio" name="agent" checked={!agentId} onChange={() => setAgentId('')} />
                 <div>
                   <strong>Standard extraction</strong>
-                  <div className="muted">OCR + Copilot extract only (no tool calling)</div>
+                  <div className="muted">GitHub Copilot extraction only (no tool calling)</div>
                 </div>
               </label>
               {agents.filter((a) => a.isActive !== false).map((a) => (
@@ -292,7 +292,7 @@ export default function Extract() {
                   <input type="radio" name="agent" checked={agentId === (a._id || a.id)} onChange={() => setAgentId(a._id || a.id)} />
                   <div>
                     <strong>{a.name}</strong>
-                    <div className="muted">{a.model || 'gpt-4o'} · {(a.toolIds || []).length} tool{(a.toolIds || []).length === 1 ? '' : 's'} attached</div>
+                    <div className="muted">{a.model || 'llama3.2:latest'} · {(a.toolIds || []).length} tool{(a.toolIds || []).length === 1 ? '' : 's'} attached</div>
                   </div>
                 </label>
               ))}
@@ -304,7 +304,7 @@ export default function Extract() {
 
           {(loading || processPhase !== 'idle') && (
             <div className="process-steps">
-              <span className={`process-step ${processPhase !== 'idle' ? 'done' : ''} ${processPhase === 'ocr' ? 'active' : ''}`}>1. OCR / text</span>
+              <span className={`process-step ${processPhase !== 'idle' ? 'done' : ''} ${processPhase === 'text' ? 'active' : ''}`}>1. Embedded text</span>
               <span className={`process-step ${processPhase === 'agent' || processPhase === 'done' ? 'done' : ''} ${processPhase === 'agent' ? 'active' : ''}`}>2. Agent + tools</span>
               <span className={`process-step ${processPhase === 'done' ? 'done' : ''}`}>3. Validate & save</span>
             </div>
@@ -437,7 +437,7 @@ export default function Extract() {
                 <div className="chat-avatar">AI</div>
                 <div>
                   <h2>Ask about this invoice</h2>
-                  <p className="muted">Answers are based on this document's extracted data and OCR text.</p>
+                  <p className="muted">Answers are based on this document's extracted data and source text.</p>
                 </div>
               </div>
 
@@ -496,7 +496,7 @@ export default function Extract() {
                   {chatLoading ? 'Thinking…' : 'Send'}
                 </button>
               </form>
-              <p className="chat-footnote">Powered by your GitHub Copilot model · Enter to send · Shift + Enter for a new line</p>
+              <p className="chat-footnote">Powered by GitHub Copilot · Enter to send · Shift + Enter for a new line</p>
             </section>
           )}
         </div>

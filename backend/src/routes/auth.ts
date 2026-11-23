@@ -2,6 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { User, Workspace } from '../models';
+import { getJwtSecret } from '../config/runtime';
 
 const router = Router();
 
@@ -12,6 +13,8 @@ router.post('/register', async (req, res, next) => {
       return res.status(400).json({ error: 'Email and password required' });
     }
 
+    if (typeof email !== 'string' || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+    if (typeof password !== 'string' || password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
     const existing = await User.findOne({ email: email.toLowerCase() });
     if (existing) {
       return res.status(409).json({ error: 'Email already registered' });
@@ -32,7 +35,7 @@ router.post('/register', async (req, res, next) => {
 
     const token = jwt.sign(
       { userId: user._id.toString(), email: user.email },
-      process.env.JWT_SECRET || 'secret',
+      getJwtSecret(),
       { expiresIn: '7d' }
     );
 
@@ -62,7 +65,7 @@ router.post('/login', async (req, res, next) => {
 
     const token = jwt.sign(
       { userId: user._id.toString(), email: user.email },
-      process.env.JWT_SECRET || 'secret',
+      getJwtSecret(),
       { expiresIn: '7d' }
     );
 
@@ -85,7 +88,7 @@ router.get('/me', async (req, res, next) => {
       return res.status(401).json({ error: 'Not authenticated' });
     }
     const token = header.split(' ')[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as { userId: string };
+    const decoded = jwt.verify(token, getJwtSecret()) as { userId: string };
 
     const user = await User.findById(decoded.userId).select('email name createdAt');
     if (!user) return res.status(404).json({ error: 'User not found' });

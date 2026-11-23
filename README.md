@@ -1,262 +1,72 @@
-# AutoProcess — GitHub Copilot + Tesseract OCR
+# AutoProcess
 
-This application uses **GitHub Copilot** (via an OpenAI-compatible gateway) for all LLM work.
-Local **Ollama is not used**.
+AutoProcess is an agentic document-processing platform using **GitHub Copilot CLI** for all LLM tasks, MongoDB for persistence, and embedded PDF text extraction for document reading.
 
-## LLM setup (required)
+## AI provider
 
-1. Install and sign in to a Copilot OpenAI-compatible proxy, for example:
+AutoProcess uses the same authenticated GitHub Copilot CLI session as ApplyAI. It does not use Ollama, an Ollama model server, a Copilot HTTP proxy, or a separately supplied GitHub token.
 
-```bash
-npx @jeffreycao/copilot-api@latest start
-```
+1. Install Node.js and GitHub CLI.
+2. Install Copilot CLI:
+   ```cmd
+   npm install -g @github/copilot
+   ```
+3. Authenticate:
+   ```cmd
+   gh auth login
+   ```
+   Or run `copilot` and use `/login`.
+4. Verify:
+   ```cmd
+   copilot --version
+   ```
+5. Set `COPILOT_BIN` in `backend/.env` to the full executable path if the backend cannot resolve it, for example:
+   ```env
+   COPILOT_BIN=C:\Users\admin\AppData\Roaming\npm\copilot.cmd
+   COPILOT_MODEL=
+   COPILOT_TIMEOUT=240
+   ```
+   Leave `COPILOT_MODEL` blank to use the Copilot CLI default model.
 
-Default URL: `http://127.0.0.1:4141`
+Copilot CLI runs headlessly. AutoProcess does not grant the model arbitrary shell or file-write access. Registered HTTP tools are executed by AutoProcess's deterministic backend runtime with its existing validation, approval, timeout and audit controls.
 
-2. In `backend/.env`:
+## Document reading — OCR disabled
 
-```env
-COPILOT_BASE_URL="http://127.0.0.1:4141"
-COPILOT_MODEL="gpt-4o"
-# COPILOT_API_KEY=   # only if your proxy needs it
-# GITHUB_TOKEN=
-```
+- Text-based PDFs: read their embedded text layer, then send the text to GitHub Copilot for structured extraction.
+- TXT, CSV and JSON: read as text, then send to GitHub Copilot.
+- Scanned/image-only PDFs: rejected with a clear message because OCR is disabled.
+- PNG/JPEG and other images: not supported because OCR is disabled.
+- No Tesseract, PyMuPDF rendering helper, OCR process, or vision-model fallback is used.
 
-3. OCR still uses local Tesseract + PyMuPDF (not cloud AI).
+A PDF containing only scanned page images does not contain selectable text. With OCR disabled, the application cannot read its invoice content. Use a text-based/searchable PDF or provide a text export.
 
+## Setup
 
-# AutoProcess — Ollama 0.40.x + Tesseract OCR
-
-This project has been adjusted for the existing local setup:
-- Ollama server: 0.40.16
-- Text model: `llama3.2:latest`
-- Scanned PDF/image OCR: locally installed Tesseract
-- PDF rendering: `pdf-to-img`
-- Normal text PDFs: embedded text layer first, OCR fallback when no usable text is found
-
-**The backend no longer calls `llama3.2-vision` or `qwen2.5vl`.** Your old Ollama runtime cannot load those vision architectures. All document images are OCR-converted to text before the text-only Ollama model is called.
-
-## 1. Configure backend
-
-In `backend/.env`, set:
-
-```env
-OLLAMA_BASE_URL="http://127.0.0.1:11434"
-OLLAMA_MODEL="llama3.2:latest"
-TESSERACT_LANG="eng"
-OCR_MAX_PAGES=10
-```
-
-If Tesseract is not on PATH, optionally set its executable path:
-
-```env
-TESSERACT_PATH="C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
-```
-
-Use the actual path on your computer. Do not put the installer `.exe` path here.
-
-## 2. Install Tesseract
-
-Install Tesseract for Windows and ensure `tesseract.exe` exists. Add the containing folder to PATH, or set `TESSERACT_PATH` above.
-
-Test in a new terminal:
-
-```powershell
-tesseract --version
-where.exe tesseract
-```
-
-## 3. Confirm Ollama text model
-
-```powershell
-ollama run llama3.2:latest
-```
-
-Exit the chat after confirming it responds. Do not select or run the vision model.
-
-## 4. Install backend dependencies and run
-
-```powershell
+Backend:
+```cmd
 cd backend
+copy .env.example .env
 npm install
 npm run dev
 ```
 
-If the project already has dependencies installed, `npm install` synchronizes them from package.json/package-lock.
-
-## 5. Run frontend
-
-In another terminal:
-
-```powershell
+Frontend:
+```cmd
 cd frontend
 npm install
 npm run dev
 ```
 
-Open the Vite URL printed in the terminal.
+Configure MongoDB, JWT_SECRET and Oracle PO API credentials in `backend/.env`. Never commit `.env` or credentials.
 
-## Extraction flow
+## Capabilities
 
-1. Frontend uploads the file to `POST /api/documents/extract`.
-2. Backend stores the uploaded file and creates a job.
-3. For PDFs, backend tries embedded text extraction first.
-4. If the PDF is scanned/image-only, `pdf-to-img` renders its pages and Tesseract OCR reads each page.
-5. For image uploads, Tesseract OCR reads the image directly.
-6. Extracted text is sent to `llama3.2:latest` through Ollama `/api/generate` with JSON output.
-7. Result and job status are stored in MongoDB.
-
-## Troubleshooting
-
-- `Tesseract OCR was not found`: check `where.exe tesseract`, or set `TESSERACT_PATH` in backend `.env`; restart backend after changes.
-- `Cannot connect to Ollama`: start Ollama and test `ollama run llama3.2:latest`.
-- `Ollama 500 unknown model architecture mllama`: backend `.env` is still pointing to a vision model. Change `OLLAMA_MODEL` to `llama3.2:latest`, stop and restart backend.
-- PDF rendering fails: run `npm install` in backend and check the console error from `pdf-to-img`.
-- Poor OCR: use a clear 200–300 DPI scan, rotate pages upright, and install the correct Tesseract language pack.
+- Configurable agents, prompt versions, output schemas and workflows.
+- Registered REST API tools with encrypted secrets, approval controls and execution traces.
+- AP invoice extraction and conditional Oracle PO enrichment.
+- Persistent document chat and execution history.
+- Human review and schema validation.
 
 ## Important
 
-The archive intentionally excludes `.env`, `.git`, `node_modules`, and previously uploaded documents. Preserve your existing `.env` and database data. Update only the source files, and back up your current project before replacing them.
-
-
-## Fix for PDF.js API/Worker version mismatch
-
-The OCR PDF renderer now uses **Python + PyMuPDF** instead of `pdf-to-img` / PDF.js.
-This avoids errors such as:
-
-`The API version "6.4.299" does not match the Worker version "5.4.296".`
-
-Install PyMuPDF in the Python environment visible to the backend:
-
-```powershell
-python -m pip install pymupdf
-python -c "import fitz; print(fitz.__doc__[:80])"
-```
-
-If Python is not on PATH, set the full executable path in `backend/.env`:
-
-```env
-PYTHON_EXECUTABLE="C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python311\\python.exe"
-```
-
-Use the actual path returned by `where.exe python`. Restart the backend after changing `.env`.
-
-The `pdf-to-img` dependency is no longer used by the OCR fallback. You do not need to uninstall it for this fix.
-
-
-## Invoice extraction chatbot
-
-After a document is extracted, the **Document Extraction** page displays the result as
-readable invoice fields and a line-item table instead of showing only raw JSON. The raw
-JSON remains available in a collapsible section.
-
-The **Ask about this invoice** chat panel uses the saved structured extraction and OCR/PDF
-text as context. It supports follow-up questions within the current chat session and uses
-the configured local Ollama text model (default: `llama3.2:latest`). No vision model or
-external AI API is required.
-
-The backend adds this authenticated endpoint:
-
-- `POST /api/documents/:jobId/chat`
-- JSON body: `{ "workspaceId": "...", "question": "...", "history": [] }`
-
-The endpoint verifies that the completed extraction belongs to the authenticated user and
-the selected workspace. Chat history is kept in the browser for the current page session;
-the source extraction and OCR text are read from MongoDB.
-
-
-## Invoice verification and persistent document chat (updated)
-- The Extract page now shows the original PDF in an embedded preview for side-by-side comparison with extracted invoice fields.
-- Completed extractions can be reopened from Jobs using **Open extraction & chat**. The original PDF preview and saved chatbot conversation are restored.
-- Chat turns are stored with the extraction record in MongoDB; existing extraction records remain compatible (chat history defaults to empty).
-- PO number extraction is conservative: a PO number is accepted only when the OCR/text contains an explicit PO / Customer PO / Purchase Order label. Invoice numbers and shipper references are not copied into `po_number`. If no explicit PO label is found, `po_number` is null and should be verified against the PDF.
-- PDF preview is served through an authenticated endpoint and does not expose the uploads folder publicly.
-
-## Oracle EBS PO/vendor enrichment
-
-The extraction pipeline can enrich the OCR invoice result with the Oracle EBS PO details REST endpoint before preparing the invoice API payload.
-
-Configure these values in `backend/.env`:
-
-```env
-ORACLE_PO_DETAILS_URL="https://ispdev.petmate.com:8500/apex/rest/get/podetails/"
-ORACLE_PO_API_TIMEOUT_MS=20000
-# Optional if the endpoint requires a bearer token:
-# ORACLE_PO_API_BEARER_TOKEN="your-token"
-```
-
-For a numeric PO found explicitly on the invoice, the backend calls the endpoint with `?po_number=<PO>`. If no numeric PO is found, it calls `?supplier_name=<OCR supplier name>` to try to resolve the supplier master record. Oracle response values take precedence for supplier name, supplier number, supplier ID, supplier site, currency and payment terms. PO line matching only assigns a PO line number when a unique eligible match is found; unresolved matches remain blank for review.
-
-The extraction result includes `api_payload` in the requested `{ "invoices": [{ "header": { ... } }] }` format. This is a prepared JSON body for the downstream invoice POST API. It is not automatically submitted because the invoice POST endpoint and authentication contract have not yet been provided.
-
-## Agent Studio (configurable agentic workflows)
-
-AutoProcess now includes an Agent Studio at `/agents`.
-
-### Capabilities
-- Create and edit agents with a saved system prompt, Ollama model, output JSON shape, selected tools and maximum tool-call rounds.
-- Register HTTP tools with a function name, description, method, endpoint, request headers and JSON Schema parameters.
-- Ollama tool calling selects tools from the functions attached to the agent. The backend executes the selected HTTP request, returns the response to Ollama, and continues until the model returns a final answer or reaches the configured iteration limit.
-- Each run is persisted as an AgentExecution with tool arguments, results, status and timing. The run API returns the execution trace.
-- The Document Extraction page can select an active agent. When selected, the agent receives the extracted invoice fields and OCR/PDF text, calls its tools, and returns its configured JSON output. Without an agent selected, the existing extraction/enrichment path remains available.
-
-### Configure the Oracle PO tool
-1. Open Agent Studio → Tool Registry.
-2. Register a tool named `get_po_details`.
-3. Use method `GET` and endpoint `https://ispdev.petmate.com:8500/apex/rest/get/podetails/`.
-4. Use parameters schema with optional `po_number` and `supplier_name` string properties. The endpoint receives these as query parameters.
-5. Attach the tool to your agent. The agent prompt should instruct it to pass `po_number` only when an explicitly labelled numeric PO was extracted; otherwise use `supplier_name` only for supplier-master lookup.
-
-### Configure the historical distribution tool
-The historical-distribution endpoint was not supplied. In Tool Registry, use **Prepare historical lookup tool**, replace the placeholder endpoint with the actual APEX endpoint, and save it. Its function parameters are `SUPPLIER_NUMBER`, `LINE_DESCRIPTION`, and `LINE_TYPE_LOOKUP_CODE`.
-
-### Secrets and security
-- Do not put passwords or tokens directly into prompts or source files.
-- Store credentials in `backend/.env`; tool header values can reference them as `{{ENV:VARIABLE_NAME}}`.
-- Tool endpoints must use HTTP or HTTPS. Localhost, link-local and literal private IPv4 endpoints are blocked by the runtime. Use approved DNS hostnames for internal services.
-- Tool calls are server-side and workspace-scoped. Register only trusted endpoints.
-- Ollama tool calling requires a model that supports function/tool calling. The default is `llama3.2:latest`; if your installed Ollama model does not return tool calls, select a compatible model in the Agent editor.
-
-### Agent APIs
-- `GET /api/agents?workspaceId=...`
-- `POST /api/agents`
-- `PUT /api/agents/:id`
-- `DELETE /api/agents/:id`
-- `GET /api/agents/tools?workspaceId=...`
-- `POST /api/agents/tools`
-- `PUT /api/agents/tools/:id`
-- `DELETE /api/agents/tools/:id?workspaceId=...`
-- `POST /api/agents/:id/run`
-- `GET /api/agents/executions?workspaceId=...`
-- `GET /api/agents/executions/:executionId?workspaceId=...`
-
-Install backend/frontend dependencies using `npm install` in each folder, then start them using `npm run dev`.
-
-
-## GitHub Copilot CLI setup (same approach as ApplyAI)
-
-AutoProcess uses the GitHub Copilot CLI as its LLM provider. It does not use the
-`127.0.0.1:4141` Copilot proxy or the direct Copilot token-exchange API.
-
-1. Install GitHub Copilot CLI (Node.js 22+):
-   ```bash
-   npm install -g @github/copilot
-   ```
-2. Authenticate using the same GitHub account used by ApplyAI:
-   ```bash
-   gh auth login
-   ```
-   Alternatively, run `copilot` and enter `/login`.
-3. Verify the CLI:
-   ```bash
-   copilot --version
-   copilot
-   ```
-4. In `backend/.env`, set `COPILOT_BIN=copilot`. Leave `COPILOT_MODEL` blank to use
-   the Copilot CLI default, or set a model available to your account.
-5. Restart the AutoProcess backend.
-
-The CLI is invoked in silent/headless mode with shell and write tools denied.
-AutoProcess's own registered HTTP tools continue to be executed by its backend
-agent runtime. No `COPILOT_BASE_URL`, port 4141 proxy, or GitHub token pasted
-into `.env` is needed.
+The `ocrText` field name remains in the existing MongoDB document model for backwards compatibility with saved records. In this version it stores extracted source text only; no OCR is performed.

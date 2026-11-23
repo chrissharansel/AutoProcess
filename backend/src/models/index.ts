@@ -75,6 +75,7 @@ export interface IWorkflow extends Document {
   name: string;
   description?: string;
   definition: Record<string, any>;
+  agentId?: Types.ObjectId;
   isActive: boolean;
   userId: Types.ObjectId;
   workspaceId: Types.ObjectId;
@@ -86,7 +87,8 @@ const WorkflowSchema = new Schema<IWorkflow>(
   {
     name: { type: String, required: true },
     description: { type: String },
-    definition: { type: Schema.Types.Mixed, default: { nodes: [], edges: [] } },
+    definition: { type: Schema.Types.Mixed, default: { steps: [] } },
+    agentId: { type: Schema.Types.ObjectId, ref: 'Agent' },
     isActive: { type: Boolean, default: true },
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     workspaceId: { type: Schema.Types.ObjectId, ref: 'Workspace', required: true },
@@ -101,6 +103,11 @@ export interface IDocument extends Document {
   mimeType: string;
   size: number;
   path: string;
+  workspaceId?: Types.ObjectId;
+  userId?: Types.ObjectId;
+  ocrText?: string;
+  ocrMeta?: Record<string, any>;
+  status?: string;
   createdAt: Date;
 }
 
@@ -111,6 +118,11 @@ const DocumentSchema = new Schema<IDocument>(
     mimeType: { type: String, required: true },
     size: { type: Number, required: true },
     path: { type: String, required: true },
+    workspaceId: { type: Schema.Types.ObjectId, ref: 'Workspace', index: true },
+    userId: { type: Schema.Types.ObjectId, ref: 'User' },
+    ocrText: { type: String },
+    ocrMeta: { type: Schema.Types.Mixed },
+    status: { type: String, default: 'uploaded' },
   },
   { timestamps: { createdAt: true, updatedAt: false } }
 );

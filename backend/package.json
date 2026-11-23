@@ -1,35 +1,38 @@
 {
   "name": "autoprocess-backend",
   "version": "1.0.0",
-  "description": "AutoProcess - AI Document & Workflow Automation Platform (Ollama text model + Tesseract OCR + MongoDB)",
+  "description": "AutoProcess - Agentic document automation using GitHub Copilot CLI + embedded PDF text extraction + MongoDB",
   "main": "dist/index.js",
   "scripts": {
     "dev": "nodemon --exec ts-node src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "node --require ts-node/register --test src/__tests__/*.test.ts"
   },
   "keywords": [
     "ai",
     "document-processing",
     "workflow",
     "automation",
-    "mongodb",
-    "ollama"
+    "mongodb"
   ],
   "author": "AutoProcess",
   "license": "MIT",
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
+    "express-rate-limit": "^8.7.4",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.8.0",
     "multer": "^1.4.5-lts.1",
     "pdf-parse": "^2.4.5",
-    "pdf-to-img": "^7.0.2",
-    "uuid": "^10.0.0"
+    "uuid": "^10.0.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
